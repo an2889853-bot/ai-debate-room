@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
     "claude_model": "fable", "claude_effort": "xhigh",      # fable 별칭 = 최신 Fable 자동 추적
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
-    "pause_each": False, "autosave": True, "beep": True, "run_code": False,
+    "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -154,10 +154,18 @@ def config_line(cfg: dict, mode: str, stage_count: int) -> str:
             f"GPT {cfg.get('codex_model') or '기본'}/{cfg.get('codex_effort') or '기본 effort'}")
 
 
+def count_debate_stages(kinds) -> int:
+    """설정상 토론 단계 수: 평가 단계와 재작성된 FINAL(FINAL 2)은 세지 않는다."""
+    kinds = list(kinds)
+    return sum(1 for k in kinds if k != "evaluate") - max(0, kinds.count("final") - 1)
+
+
 def round_stage_count(run: dict) -> int:
-    """저장된 라운드의 단계 수. 계획이 저장돼 있으면 그 길이, 아니면(구 기록) rounds로 역산."""
+    """저장된 라운드의 단계 수. 계획이 저장돼 있으면 거기서 세고, 아니면(구 기록) rounds로 역산."""
     steps = run.get("plan_steps")
-    return len(steps) if steps else int(run.get("stage_count") or int(run.get("rounds", 1)) * 2 + 3)
+    if steps:
+        return count_debate_stages(k for _, k in steps)
+    return int(run.get("stage_count") or int(run.get("rounds", 1)) * 2 + 3)
 
 
 def render_user(question: str, attachments: list[dict], cfg: dict, mode: str, stage_count: int) -> None:
@@ -245,8 +253,11 @@ def render_entry(e: dict, expanded: bool = False) -> None:
         return
     name = f"{NAME[who]} · {label}"
     used = used_models(e)
+    if e.get("kind") == "evaluate":
+        v = D.eval_verdict(e)
+        name += "  —  " + ("✅ PASS" if v == "PASS" else "⚠ NEEDS_WORK" if v == "NEEDS_WORK" else "❔ 판정 형식 없음")
     with st.chat_message(NAME[who], avatar=AVATAR[who]):
-        if label == "FINAL":
+        if label.startswith("FINAL"):
             st.markdown(f'<div class="final-title">🏁 {name}  '
                         f'<span class="stage-meta">({e.get("elapsed", 0)}s{" · " + used if used else ""})</span></div>',
                         unsafe_allow_html=True)
@@ -278,12 +289,27 @@ def render_contract_summary(stages: list[dict]) -> None:
                    + (f" · 재요청 {s['retries']}회" if s["retries"] else "") + ")")
 
 
+def render_eval_summary(stages: list[dict]) -> None:
+    """독립 평가 결과. NEEDS_WORK로 끝났으면 경고."""
+    s = D.eval_summary(stages)
+    if not s["evals"]:
+        return
+    tail = " (FINAL 재작성 후 재평가)" if s["revised"] else ""
+    if s["verdict"] == "PASS":
+        st.caption(f"🧑‍⚖️ 독립 평가: PASS{tail}")
+    elif s["verdict"] == "NEEDS_WORK":
+        st.warning(f"🧑‍⚖️ 독립 평가: NEEDS_WORK{tail} — 평가자의 지적을 확인한 뒤 FINAL을 쓰세요.")
+    else:
+        st.caption("🧑‍⚖️ 독립 평가: 판정 형식이 없어 해석 불가")
+
+
 def render_round(run: dict) -> None:
     render_user(run["question"], run.get("attachments", []), run.get("config") or {},
                 run.get("mode", "general"), round_stage_count(run))
     for e in run.get("stages", []):
         render_entry(e)
     render_contract_summary(run.get("stages", []))
+    render_eval_summary(run.get("stages", []))
     if run.get("early_stopped"):
         st.caption("⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뛰었습니다.")
     if run.get("status") == "stopped":
@@ -308,7 +334,7 @@ def resume_round(idx: int) -> None:
     ss.active = {
         "question": run["question"], "attachments": run.get("attachments", []), "cfg": cfg,
         "mode": run.get("mode", "general"), "rounds": run.get("rounds", 1),
-        "stage_count": run.get("stage_count", len(plan)), "early_stop": True,
+        "stage_count": run.get("stage_count", len(plan)), "early_stop": True, "eval_revise": True,
         "plan": plan, "stages": list(run.get("stages", [])), "prior": prior, "prior_rounds": len(prior),
         "status": "running", "early_stopped": bool(run.get("early_stopped")), "started": run.get("started"),
         "first": run.get("first", "claude"), "final_who": run.get("final_who"),
@@ -465,15 +491,21 @@ with st.sidebar:
         custom_steps = [(KO2WHO.get(str(r["AI"])), KO2KIND.get(str(r["역할"]))) for _, r in edited.iterrows()]
         custom_steps = [(w, k) for w, k in custom_steps if w and k]
         if st.button("기본 순서로 되돌리기", disabled=busy, width="stretch"):
-            ss.plan_base = D.default_plan(1, first_val, None, stage_count)
+            ss.plan_base = D.default_plan(1, first_val, None, stage_count, evaluate)
             ss.plan_nonce += 1
             st.rerun()
     final_val = None if final_sel == "same" else final_sel
     early_stop = st.checkbox("검토 AI가 '추가 수정 불필요'라 하면 조기 종료", value=bool(s["early_stop"]), disabled=busy)
     pause_each = st.checkbox("단계마다 멈춰서 내가 끼어들기", value=bool(s["pause_each"]),
                              help="끄면 자동으로 끝까지 진행. 진행 중에도 '다음 단계 전에 멈춤' 버튼으로 언제든 멈출 수 있음")
+    evaluate = st.checkbox("🧑‍⚖️ FINAL 뒤 독립 평가", value=bool(s.get("evaluate", True)), disabled=busy,
+                           help="최종 정리를 쓰지 않은 쪽 AI가 새 호출로 FINAL만 채점해 [평가: PASS] 또는 [평가: NEEDS_WORK]와 [지적 N]을 냅니다 (호출 1회 추가)")
+    eval_revise = st.checkbox("NEEDS_WORK면 FINAL 1회 재작성 후 재평가", value=bool(s.get("eval_revise", True)),
+                              disabled=busy or not evaluate,
+                              help="평가자의 [지적 N]을 반영 계약으로 검사받으며 FINAL 2를 쓰고 Eval 2로 다시 채점 (최대 호출 2회 추가)")
     try:
-        PLAN = D.plan_stages(rounds, mode, first_val, final_val, custom_steps if use_custom else None, stage_count)
+        PLAN = D.plan_stages(rounds, mode, first_val, final_val, custom_steps if use_custom else None, stage_count,
+                             evaluate and not use_custom)  # 직접 편집이면 표에 '평가' 행을 넣는다
         plan_ok = True
         st.caption("순서: " + D.plan_preview(PLAN))
     except ValueError as e:
@@ -543,6 +575,7 @@ with st.sidebar:
                     "codex_model": codex_model or s["codex_model"], "codex_effort": codex_effort or "(기본)",
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
                     "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
+                    "evaluate": evaluate, "eval_revise": eval_revise,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:
@@ -620,6 +653,7 @@ def finalize_active(status: str, error: str | None = None) -> None:
     round_.update({"plan": [st_["label"] for st_ in active["plan"]],
                    "plan_steps": [[st_["who"], st_["kind"]] for st_ in active["plan"]],  # 재개용
                    "config": D.asdict(active["cfg"]), "contract": D.contract_summary(active["stages"]),
+                   "evaluation": D.eval_summary(active["stages"]),
                    "status": status, "error": error, "finished": now})
     if ss.conv is None:
         ss.conv = D.new_conversation(active["question"])
@@ -687,11 +721,9 @@ def run_active_stage() -> None:
     entry = live["entry"]
     active["stages"].append(entry)
     done += 1
-    if active["early_stop"] and stage["kind"] == "review" and D.reviewer_says_ok(entry):
-        final_idx = next((i for i, s_ in enumerate(plan) if s_["kind"] == "final"), None)
-        if final_idx is not None and final_idx > done:
-            active["plan"] = plan[:done] + plan[final_idx:]
-            active["early_stopped"] = True
+    active["plan"], ev = D.adjust_plan_after(plan, done, entry, active["early_stop"], active.get("eval_revise", True))
+    if ev and ev["type"] == "skip":
+        active["early_stopped"] = True
     if done >= len(active["plan"]):
         finalize_active("done")
     elif pause_each or active.get("pause_next"):
@@ -722,7 +754,7 @@ def paused_controls() -> None:
             active["stages"].append(D.interjection_entry(text))
         active["status"] = "running"
         st.rerun()
-    if c3.button("⏭ 바로 FINAL로", width="stretch", disabled=nxt["kind"] == "final"):
+    if c3.button("⏭ 바로 FINAL로", width="stretch", disabled=nxt["kind"] in ("final", "evaluate")):
         if text.strip():
             active["stages"].append(D.interjection_entry(text))
         final_idx = next(i for i, s_ in enumerate(plan) if s_["kind"] == "final")
@@ -757,7 +789,8 @@ else:
 
 if ss.active:
     active = ss.active
-    render_user(active["question"], active["attachments"], D.asdict(active["cfg"]), active["mode"], len(active["plan"]))
+    render_user(active["question"], active["attachments"], D.asdict(active["cfg"]), active["mode"],
+                count_debate_stages(s_["kind"] for s_ in active["plan"]))
     for i, e in enumerate(active["stages"]):
         render_entry(e, expanded=(i == len(active["stages"]) - 1))
     if active.get("early_stopped"):
@@ -788,7 +821,7 @@ if submitted is not None and ((submitted.text or "").strip() or submitted.files)
     prior = [{"question": r["question"], "final": D.final_of(r)} for r in prior_rounds if D.final_of(r)]
     ss.active = {
         "question": question, "attachments": attachments, "cfg": cfg, "mode": mode, "rounds": rounds,
-        "stage_count": stage_count, "early_stop": early_stop, "plan": list(PLAN), "stages": [], "prior": prior,
+        "stage_count": stage_count, "early_stop": early_stop, "eval_revise": eval_revise, "plan": list(PLAN), "stages": [], "prior": prior,
         "prior_rounds": len(prior), "status": "running", "early_stopped": False, "pause_next": False,
         "first": first_val, "final_who": final_val,
         "started": datetime.now().isoformat(timespec="seconds"),

@@ -72,6 +72,7 @@ class FakeStages:
         verdict = D.VERDICT_OK if self.review_ok else D.VERDICT_NEED
         tags = "[반영 1] 근거를 보강했습니다.\n[반박 2] 이미 처리된 항목입니다.\n" if self.resolve else ""
         code = "\n```python\nprint('hi')\n```\n```python\ndef f(:\n    pass\n```\n" if mode == "code_review" else ""
+        n_eval = sum(1 for c in self.calls if c["kind"] == "evaluate")   # 이번 호출 포함
         content = {
             "initial": f"최초 답변입니다.{code}",
             "review": (f"[지적 없음]\n{verdict}" if self.review_ok
@@ -79,6 +80,8 @@ class FakeStages:
             "rebuttal": f"{tags}수정된 답변입니다.",
             "recheck": (f"[지적 없음]\n{verdict}" if self.review_ok else f"[지적 1] 표현이 아직 모호합니다.\n{verdict}"),
             "final": f"{tags}최종 답변입니다.",
+            # 첫 평가는 NEEDS_WORK(재작성 유도), 두 번째부터 PASS
+            "evaluate": (f"[지적 1] 결론이 모호합니다.\n{D.EVAL_NEEDS}" if n_eval == 1 else f"[지적 없음]\n{D.EVAL_PASS}"),
         }[stage["kind"]]
         if on_delta:
             on_delta(content)

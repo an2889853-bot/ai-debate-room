@@ -7,6 +7,7 @@ import time
 
 from streamlit.testing.v1 import AppTest
 
+import debate as D
 from conftest import ROOT
 
 APP = str(ROOT / "app.py")
@@ -36,12 +37,14 @@ def button(at, label):
     return next(b for b in at.button if b.label == label)
 
 
-def configure(at, *, stage_count: int, first: str, pause_each: bool = False, early_stop: bool = True) -> None:
+def configure(at, *, stage_count: int, first: str, pause_each: bool = False, early_stop: bool = True,
+              evaluate: bool = False) -> None:
     radio(at, "대화 단계 수").set_value(stage_count)
     select(at, "먼저 답하는 AI").set_value(first)
     select(at, "최종 정리 AI").set_value("same")
     checkbox(at, "검토 AI가").set_value(early_stop)
     checkbox(at, "단계마다 멈춰서").set_value(pause_each)
+    checkbox(at, "🧑‍⚖️ FINAL 뒤").set_value(evaluate)
     at.run()
     assert not at.exception, [str(e.value) for e in at.exception]
 
@@ -83,7 +86,8 @@ def test_sidebar_defaults_render(isolated):
     r = radio(at, "대화 단계 수")
     assert r.options == ["3단계 (최초 → 검토 → 최종)", "5단계 (최초 → 검토 → 반박 → 재검사 → 최종)"]
     caps = [c.value for c in at.sidebar.caption if c.value.startswith("순서:")]
-    assert len(caps) == 1 and caps[0].count("→") == r.value - 1
+    eval_on = checkbox(at, "🧑‍⚖️ FINAL 뒤").value          # 기본 켜짐 → 순서 끝에 Eval 한 단계가 더 붙는다
+    assert eval_on and len(caps) == 1 and caps[0].count("→") == r.value - 1 + 1 and caps[0].endswith("·Eval")
 
 
 def test_three_stage_round_end_to_end(isolated, fake_stages):
@@ -163,6 +167,25 @@ def test_pause_and_interjection(isolated, fake_stages):
     assert [e["kind"] for e in rnd["stages"]] == ["initial", "interjection", "review", "final"]
     review_prompt = next(c for c in fake.calls if c["kind"] == "review")["prompt"]
     assert "[사용자 · 개입]\n비상정지는 하드와이어로" in review_prompt
+
+
+def test_independent_evaluation_with_revision(isolated, fake_stages):
+    """FINAL 뒤 상대 AI가 평가 → NEEDS_WORK → FINAL 2(평가자 지적을 계약으로 검사) → Eval 2 PASS."""
+    fake = fake_stages(review_ok=False)
+    at = boot()
+    configure(at, stage_count=3, first="claude", evaluate=True)
+    caps = [c.value for c in at.sidebar.caption if c.value.startswith("순서:")]
+    assert caps[0].endswith("GPT·Eval"), "최종 정리를 쓰지 않은 쪽(GPT)이 평가자"
+    submit(at, "평가 테스트")
+    drive(at)
+    rnd = last_round(at)
+    assert [e["label"] for e in rnd["stages"]] == ["Initial", "Review", "FINAL", "Eval", "FINAL 2", "Eval 2"]
+    assert rnd["evaluation"] == {"verdict": "PASS", "evals": 2, "revised": True}
+    assert rnd["stages"][4]["contract"]["source"] == "GPT · Eval" and rnd["stages"][4]["contract"]["missing"] == []
+    assert D.final_of(rnd) == rnd["stages"][4]["content"]
+    assert "처리해야 할 지적 (직전 [GPT · Eval])" in fake.calls[4]["prompt"]
+    assert any("독립 평가: PASS (FINAL 재작성 후 재평가)" in c.value for c in at.caption)
+    assert any("3단계" in c.value for c in at.caption), "설정 요약의 단계 수는 평가를 세지 않는다"
 
 
 def test_code_review_mode_shows_evidence(isolated, fake_stages):

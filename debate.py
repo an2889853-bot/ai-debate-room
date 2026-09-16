@@ -795,7 +795,7 @@ VERDICT_RULE = (f"\n답변의 **맨 마지막 줄**에 반드시 `{VERDICT_NEED}
 ISSUE_RE = re.compile(r"\[\s*지적\s*(\d+)\s*\]")
 NO_ISSUE_RE = re.compile(r"\[\s*지적\s*없음\s*\]")
 RESOLVE_RE = re.compile(r"\[\s*(반영|반박)\s*(\d+)\s*\]")
-REVIEW_KINDS = ("review", "recheck")     # 지적을 내는 단계
+REVIEW_KINDS = ("review", "recheck", "evaluate")   # 지적을 내는 단계 (평가자의 지적은 재작성 FINAL이 답한다)
 RESPOND_KINDS = ("rebuttal", "final")    # 직전 지적에 답해야 하는 단계
 MAX_CONTRACT_RETRIES = 1
 ISSUE_FORMAT_RULE = (
@@ -886,6 +886,52 @@ def contract_summary(stages: list[dict]) -> dict:
         if c.get("missing"):
             missing.append((f"{DISPLAY[h['who']]} · {h['label']}", list(c["missing"])))
     return {"issues": total, "accepted": acc, "rejected": rej, "retries": retries, "missing": missing, "ok": not missing}
+
+
+# ---- 독립 평가자 (evaluate 단계) ----
+# FINAL 뒤에 상대 AI가 새 호출로 최종 답변만 채점한다: 마지막 줄 [평가: PASS] / [평가: NEEDS_WORK], 문제는 [지적 N]으로.
+# NEEDS_WORK면(옵션) FINAL을 한 번 다시 쓰고(평가자의 지적은 반영 계약으로 검사됨) 다시 평가한다 — 최대 1회.
+EVAL_PASS = "[평가: PASS]"
+EVAL_NEEDS = "[평가: NEEDS_WORK]"
+EVAL_RE = re.compile(r"\[\s*평가\s*:\s*(PASS|NEEDS[_ ]?WORK)\s*\]", re.I)
+EVAL_RULE = (f"\n답변의 **맨 마지막 줄**에 반드시 `{EVAL_PASS}` 또는 `{EVAL_NEEDS}` 중 하나만 적으십시오. "
+             "사소한 표현 차이나 취향 문제는 PASS입니다. 사용자에게 해가 될 오류·누락·반영되지 않은 지적이 있을 때만 NEEDS_WORK입니다.")
+
+
+def eval_verdict(entry: dict) -> str | None:
+    """평가 단계 답변의 판정: "PASS" | "NEEDS_WORK" | None(형식 없음). 마지막 것이 유효."""
+    found = EVAL_RE.findall(entry.get("content", "") or "")
+    if not found:
+        return None
+    return "PASS" if found[-1].upper() == "PASS" else "NEEDS_WORK"
+
+
+def eval_summary(stages: list[dict]) -> dict:
+    """라운드의 평가 결과: {"verdict": 마지막 평가 판정|None, "evals": 평가 횟수, "revised": FINAL 재작성 여부}."""
+    evals = [h for h in stages if h.get("kind") == "evaluate"]
+    return {"verdict": eval_verdict(evals[-1]) if evals else None, "evals": len(evals),
+            "revised": any(h.get("label", "").startswith("FINAL ") for h in stages)}
+
+
+def adjust_plan_after(plan: list[dict], done: int, entry: dict, early_stop: bool = True,
+                      eval_revise: bool = True) -> tuple[list[dict], dict | None]:
+    """단계 하나가 끝난 뒤 남은 계획을 조정한다 (UI·콘솔 공용). done = 방금 끝난 단계까지 완료된 개수.
+    - 검토가 '추가 수정 불필요'면(early_stop) 남은 검토/반박/재검사를 건너뛰고 FINAL(과 그 뒤 평가)로 → {"type": "skip", "skipped": [...]}
+    - 평가가 NEEDS_WORK면(eval_revise, 아직 재작성 전) FINAL 2 + Eval 2를 뒤에 붙인다 → {"type": "revise", "added": [...]}
+    아니면 (plan, None)."""
+    if early_stop and entry.get("kind") == "review" and reviewer_says_ok(entry):
+        final_idx = next((k for k, s in enumerate(plan) if s["kind"] == "final"), None)
+        if final_idx is not None and final_idx > done:
+            skipped = [s["label"] for s in plan[done:final_idx]]
+            return plan[:done] + plan[final_idx:], {"type": "skip", "skipped": skipped}
+    if eval_revise and entry.get("kind") == "evaluate" and eval_verdict(entry) == "NEEDS_WORK" and done >= len(plan):
+        finals = [s for s in plan if s["kind"] == "final"]
+        if len(finals) == 1:  # 아직 재작성 전
+            final2 = dict(finals[0], label="FINAL 2",
+                          instruction=finals[0]["instruction"] + " 이번에는 독립 평가자의 지적을 항목별로 판정·반영해 최종 답변을 다시 쓰십시오.")
+            eval2 = dict(plan[-1], label="Eval 2")
+            return plan + [final2, eval2], {"type": "revise", "added": ["FINAL 2", "Eval 2"]}
+    return plan, None
 
 
 # ---- 코드 블록 검사 (외부 증거) ----
@@ -991,9 +1037,16 @@ STAGE_TEMPLATES: dict[str, str] = {
         "사용자 질문부터 지금까지의 Claude/GPT 전체 토론을 종합하십시오.{fb_note} 양쪽 의견 중 남아 있는 충돌이 있으면 판단해 결론을 내리십시오. "
         "그리고 사용자에게 보여줄 **하나의 완결된 최종 답변**만 작성하십시오. 토론 과정을 길게 재서술하지 말고, "
         "맨 끝에 '토론을 통해 달라진 점'을 3줄 이내로만 덧붙이십시오."),
+    "evaluate": (
+        "당신은 이 토론의 **독립 평가자**입니다. 답을 새로 쓰지 말고 {other}의 최종 답변(FINAL)만 채점하십시오. 기준: "
+        "(1) 사용자 질문에 실제로 답했는가, (2) 검토에서 나온 지적이 최종 답변에 반영되었거나 근거 있게 반박되었는가, "
+        "(3) 근거 없는 단정·내부 모순·사실 오류, (4) 대화 기록의 '[프로그램 검사 ...]' 결과와 어긋나는 주장. "
+        "문제가 있으면 무엇을 어떻게 고쳐야 하는지 구체적으로 적으십시오." + ISSUE_FORMAT_RULE + EVAL_RULE),
 }
-KIND_LABEL = {"initial": "Initial", "review": "Review", "rebuttal": "Rebuttal", "recheck": "Recheck", "final": "FINAL"}
-KIND_KO = {"initial": "최초 답변", "review": "검토", "rebuttal": "반박·수정", "recheck": "재검사", "final": "최종 정리"}
+KIND_LABEL = {"initial": "Initial", "review": "Review", "rebuttal": "Rebuttal", "recheck": "Recheck", "final": "FINAL",
+              "evaluate": "Eval"}
+KIND_KO = {"initial": "최초 답변", "review": "검토", "rebuttal": "반박·수정", "recheck": "재검사", "final": "최종 정리",
+           "evaluate": "평가"}
 OTHER = {"claude": "gpt", "gpt": "claude"}
 
 MODES: dict[str, dict] = {
@@ -1049,7 +1102,7 @@ DEFAULT_STAGE_COUNT = 3      # 기본 3단계 (최초 → 검토 → 최종)
 
 
 def default_plan(rounds: int = 1, first: str = "claude", final_who: str | None = None,
-                 stage_count: int = DEFAULT_STAGE_COUNT) -> list[tuple[str, str]]:
+                 stage_count: int = DEFAULT_STAGE_COUNT, evaluate: bool = False) -> list[tuple[str, str]]:
     """기본 순서 (A=first, B=상대 AI).
     stage_count=3: A 최초 → B 검토 → (final_who 또는 A) 최종. 검토 지적은 최종 단계가 직접 판정·반영한다.
     stage_count=5: A 최초 → (B 검토 → A 반박)×rounds → B 재검사 → (final_who 또는 A) 최종.
@@ -1058,11 +1111,14 @@ def default_plan(rounds: int = 1, first: str = "claude", final_who: str | None =
     b = OTHER[a]
     last = final_who if final_who in OTHER else a
     if int(stage_count) <= 3:
-        return [(a, "initial"), (b, "review"), (last, "final")]
-    steps = [(a, "initial")]
-    for _ in range(max(1, int(rounds))):
-        steps += [(b, "review"), (a, "rebuttal")]
-    steps += [(b, "recheck"), (last, "final")]
+        steps = [(a, "initial"), (b, "review"), (last, "final")]
+    else:
+        steps = [(a, "initial")]
+        for _ in range(max(1, int(rounds))):
+            steps += [(b, "review"), (a, "rebuttal")]
+        steps += [(b, "recheck"), (last, "final")]
+    if evaluate:  # 최종 정리를 쓰지 않은 쪽이 독립 평가자
+        steps.append((OTHER[last], "evaluate"))
     return steps
 
 
@@ -1076,8 +1132,13 @@ def validate_plan(steps: list[tuple[str, str]]) -> str | None:
     kinds = [k for _, k in steps]
     if kinds[0] != "initial":
         return "첫 단계는 '최초 답변'이어야 합니다."
-    if kinds[-1] != "final":
-        return "마지막 단계는 '최종 정리'여야 합니다."
+    if "evaluate" in kinds:
+        if kinds.count("evaluate") > 1:
+            return "'평가'는 한 번만 넣을 수 있습니다."
+        if kinds[-1] != "evaluate" or len(kinds) < 2 or kinds[-2] != "final":
+            return "'평가'는 '최종 정리' 바로 뒤, 맨 마지막에만 둘 수 있습니다."
+    elif kinds[-1] != "final":
+        return "마지막 단계는 '최종 정리'(또는 그 뒤의 '평가')여야 합니다."
     if kinds.count("initial") != 1 or kinds.count("final") != 1:
         return "'최초 답변'과 '최종 정리'는 각각 한 번만 넣을 수 있습니다."
     return None
@@ -1085,11 +1146,11 @@ def validate_plan(steps: list[tuple[str, str]]) -> str | None:
 
 def plan_stages(rounds: int = 1, mode: str = "general", first: str = "claude",
                 final_who: str | None = None, custom: list | None = None,
-                stage_count: int = DEFAULT_STAGE_COUNT) -> list[dict]:
+                stage_count: int = DEFAULT_STAGE_COUNT, evaluate: bool = False) -> list[dict]:
     """토론 단계 계획. 각 항목: {"who", "label", "kind", "instruction"}.
-    custom이 있으면 [(who, kind), ...] 그대로, 없으면 default_plan(rounds, first, final_who, stage_count)."""
+    custom이 있으면 [(who, kind), ...] 그대로, 없으면 default_plan(rounds, first, final_who, stage_count, evaluate)."""
     steps = ([(str(w), str(k)) for w, k in custom] if custom
-             else default_plan(rounds, first, final_who, stage_count))
+             else default_plan(rounds, first, final_who, stage_count, evaluate))
     err = validate_plan(steps)
     if err:
         raise ValueError(err)
@@ -1099,7 +1160,7 @@ def plan_stages(rounds: int = 1, mode: str = "general", first: str = "claude",
     for i, (who, kind) in enumerate(steps):
         counts[kind] = counts.get(kind, 0) + 1
         n = counts[kind]
-        label = KIND_LABEL[kind] + ("" if n == 1 or kind in ("initial", "final") else f" {n}")
+        label = KIND_LABEL[kind] + ("" if n == 1 or kind in ("initial", "final", "evaluate") else f" {n}")
         # {other}: 최초 답변이면 다음 단계(검토자), 그 외엔 직전 단계 작성자
         ref = steps[i + 1][0] if kind == "initial" and i + 1 < len(steps) else (steps[i - 1][0] if i > 0 else OTHER[who])
         fmt = {"other": DISPLAY[ref] if ref != who else "이전 단계"}
@@ -1225,10 +1286,11 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
                on_event: EventCB | None = None, prior: list[dict] | None = None,
                attachments: list[dict] | None = None, rounds: int = 1, mode: str = "general",
                early_stop: bool = True, first: str = "claude", final_who: str | None = None,
-               custom: list | None = None, stage_count: int = DEFAULT_STAGE_COUNT) -> dict:
-    """콘솔용: 계획된 단계를 순차 실행. 각 단계 시작/완료/오류/건너뜀을 on_event로 알린다."""
+               custom: list | None = None, stage_count: int = DEFAULT_STAGE_COUNT,
+               evaluate: bool = False, eval_revise: bool = True) -> dict:
+    """콘솔용: 계획된 단계를 순차 실행. 각 단계 시작/완료/오류/건너뜀/재작성을 on_event로 알린다."""
     emit = on_event or (lambda e: None)
-    plan = plan_stages(rounds, mode, first, final_who, custom, stage_count)
+    plan = plan_stages(rounds, mode, first, final_who, custom, stage_count, evaluate)
     if max_stage is not None:
         plan = plan[:max(1, max_stage)]
     history: list[dict] = []
@@ -1251,17 +1313,16 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
         history.append(entry)
         emit({"type": "done", "index": i + 1, "total": len(plan), **entry})
         i += 1
-        if early_stop and stage["kind"] == "review" and reviewer_says_ok(entry):
-            final_idx = next((k for k, s in enumerate(plan) if s["kind"] == "final"), None)
-            if final_idx is not None and final_idx > i:
-                skipped = [s["label"] for s in plan[i:final_idx]]
+        plan, ev = adjust_plan_after(plan, i, entry, early_stop, eval_revise)
+        if ev:
+            if ev["type"] == "skip":
                 run["early_stopped"] = True
-                emit({"type": "skip", "skipped": skipped})
-                plan = plan[:i] + plan[final_idx:]
-                run["plan"] = [s["label"] for s in plan]
+            emit(ev)
+            run["plan"] = [s["label"] for s in plan]
     else:
         run["status"] = "done"
     run["contract"] = contract_summary(history)
+    run["evaluation"] = eval_summary(history)
     run["finished"] = datetime.now().isoformat(timespec="seconds")
     return run
 
@@ -1310,6 +1371,8 @@ def _round_lines(run: dict) -> list[str]:
             lines += [f"> 🧾 {contract_line(h['contract'])}", ""]
         if h.get("evidence"):
             lines += [f"> 🔬 {evidence_summary(h['evidence'])}"] + [f"> {ln}" for ln in render_evidence(h).splitlines()[1:]] + [""]
+        if h.get("kind") == "evaluate":
+            lines += [f"> 🧑‍⚖️ 독립 평가: {eval_verdict(h) or '(판정 형식 없음)'}", ""]
     if run.get("early_stopped"):
         lines += ["> ⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뜀", ""]
     if run.get("status") == "stopped":
@@ -1378,7 +1441,7 @@ def delete_conversation(path: str | Path) -> None:
 
 def final_of(run: dict) -> str | None:
     for s in reversed(run.get("stages", [])):
-        if s.get("label") == "FINAL":
+        if s.get("kind") == "final" or str(s.get("label", "")).startswith("FINAL"):
             return s["content"]
     return None
 
@@ -1390,6 +1453,9 @@ def console_event(e: dict) -> None:
     if e["type"] == "skip":
         print(f"\n⏩ 검토 판정 '추가 수정 불필요' → 건너뜀: {', '.join(e['skipped'])}", flush=True)
         return
+    if e["type"] == "revise":
+        print(f"\n🔁 독립 평가 NEEDS_WORK → 추가: {', '.join(e['added'])}", flush=True)
+        return
     name = f"{DISPLAY[e['who']]} · {e['label']}"
     if e["type"] == "start":
         print(f"\n▶ [{e['index']}/{e['total']}] {name} 응답 생성 중...", flush=True)
@@ -1400,6 +1466,8 @@ def console_event(e: dict) -> None:
             print(f"🧾 {contract_line(e['contract'])}\n", flush=True)
         if e.get("evidence"):
             print(f"🔬 {evidence_summary(e['evidence'])}\n{render_evidence(e)}\n", flush=True)
+        if e.get("kind") == "evaluate":
+            print(f"🧑‍⚖️ 독립 평가: {eval_verdict(e) or '(판정 형식 없음)'}\n", flush=True)
     elif e["type"] == "error":
         cli = "claude" if e["who"] == "claude" else "codex"
         print(f"\n❌ 오류 — 단계 {e['index']}/{e['total']} {name} ({cli} CLI)\n{e['error']}\n", flush=True)
@@ -1441,6 +1509,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan", default=None,
                     help="순서 직접 지정, 예: claude:initial,gpt:review,claude:rebuttal,gpt:recheck,claude:final")
     ap.add_argument("--no-early-stop", action="store_true", help="검토 AI가 '추가 수정 불필요'여도 끝까지 진행")
+    ap.add_argument("--no-evaluate", action="store_true", help="FINAL 뒤 독립 평가(상대 AI의 PASS/NEEDS_WORK 채점)를 생략")
+    ap.add_argument("--no-eval-revise", action="store_true", help="평가가 NEEDS_WORK여도 FINAL을 다시 쓰지 않음")
     ap.add_argument("--max-stage", type=int, default=None, help="앞의 N단계만 실행 (테스트용)")
     ap.add_argument("--claude-model", default=Config.claude_model, help="fable/opus/sonnet 별칭 또는 전체 모델명 (기본 fable=최신 Fable)")
     ap.add_argument("--claude-effort", default=Config.claude_effort, help="low/medium/high/xhigh/max (기본 xhigh)")
@@ -1506,11 +1576,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"❌ --plan 형식 오류: {e}")
             return 2
     cm, ce, cnote = resolve_codex(cfg)
-    print(f"(모드 {MODES[a.mode]['name']}, 순서 {plan_preview(plan_stages(a.rounds, a.mode, a.first, a.final_who, custom, a.stage_count))}\n"
+    print(f"(모드 {MODES[a.mode]['name']}, 순서 {plan_preview(plan_stages(a.rounds, a.mode, a.first, a.final_who, custom, a.stage_count, not a.no_evaluate))}\n"
           f" claude: {cfg.claude_model or '기본'}/{cfg.claude_effort or '기본 effort'}, "
           f"codex: {cm or '기본'}/{ce or '기본 effort'}{' [' + cnote + ']' if cnote else ''}, timeout {cfg.timeout}s)")
     run = run_debate(question, cfg, max_stage=a.max_stage, on_event=console_event, attachments=attachments,
                      rounds=a.rounds, stage_count=a.stage_count, mode=a.mode, early_stop=not a.no_early_stop,
+                     evaluate=not a.no_evaluate, eval_revise=not a.no_eval_revise,
                      first=a.first, final_who=a.final_who, custom=custom)
     if not a.no_save:
         conv = new_conversation(question)
