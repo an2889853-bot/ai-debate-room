@@ -1,0 +1,4 @@
+# 개발·테스트용. 설치: .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+# 테스트 실행: .venv\Scripts\python.exe -m pytest  (실제 CLI는 호출하지 않음)
+-r requirements.txt
+pytest>=8

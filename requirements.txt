@@ -1,0 +1,5 @@
+# AI Debate Room 실행 의존성. Python 3.11 이상 (3.14.7로 검증, 2026-09-16).
+# 설치: .venv\Scripts\python.exe -m pip install -r requirements.txt
+# pandas·pillow는 streamlit이 함께 설치한다. Claude Code CLI·Codex CLI는 별도 설치 (CLAUDE.md 참고).
+streamlit==1.63.0
+pypdf==6.18.0

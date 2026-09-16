@@ -1,0 +1,93 @@
+# -*- coding: utf-8 -*-
+"""공통 픽스처.
+
+원칙: 테스트는 실제 claude/codex CLI를 절대 호출하지 않는다 — 구독 사용량을 쓰지 않고,
+로그인 상태(특히 `codex login --device-auth`는 시작만 해도 기존 로그인을 지운다)를 건드리지 않기 위해.
+CLI에 닿는 함수는 전부 가짜로 바꾸고, 개인 파일(chats\\, runs\\, ui_settings.json)은 격리·보존한다.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import debate as D  # noqa: E402
+
+SETTINGS_PATH = ROOT / "ui_settings.json"
+
+
+@pytest.fixture
+def keep_settings():
+    """사이드바를 조작하면 ui_settings.json이 저장되므로 테스트 전후로 원본을 보존한다."""
+    backup = SETTINGS_PATH.read_bytes() if SETTINGS_PATH.exists() else None
+    yield
+    if backup is None:
+        SETTINGS_PATH.unlink(missing_ok=True)
+    else:
+        SETTINGS_PATH.write_bytes(backup)
+
+
+@pytest.fixture
+def isolated(tmp_path, monkeypatch, keep_settings):
+    """chats\\·runs\\ 를 임시 폴더로 돌리고, CLI 탐색·로그인 상태·모델 목록·알림음을 가짜로 바꾼다."""
+    monkeypatch.setattr(D, "CHATS", tmp_path / "chats")
+    monkeypatch.setattr(D, "IMAGE_DIR", tmp_path / "chats" / "_img")
+    monkeypatch.setattr(D, "RUNS", tmp_path / "runs")
+    # 존재하지 않는 실행 파일명 → 혹시 가짜를 우회해 실제 호출로 가더라도 즉시 실패해 사용량을 쓰지 않는다
+    monkeypatch.setattr(D, "find_claude", lambda: "claude-fake.exe")
+    monkeypatch.setattr(D, "find_codex", lambda: "codex-fake.exe")
+    monkeypatch.setattr(D, "claude_auth_status",
+                        lambda exe: {"loggedIn": True, "email": "test@example.com", "subscriptionType": "test",
+                                     "authMethod": "fake", "detail": ""})
+    monkeypatch.setattr(D, "codex_auth_status", lambda exe: {"loggedIn": True, "detail": "Logged in (fake)"})
+    monkeypatch.setattr(D, "list_codex_models", lambda exe, timeout=60: [dict(m) for m in D.CODEX_MODELS_FALLBACK])
+    try:
+        import winsound
+        monkeypatch.setattr(winsound, "MessageBeep", lambda *a, **k: None)
+    except ImportError:
+        pass
+    return tmp_path
+
+
+class FakeStages:
+    """`execute_stage` 대역. 단계 종류별 고정 답변을 돌려주고 호출 내역(순서·전달된 기록 길이·프롬프트)을 남긴다.
+    실제 프롬프트 조립(`build_prompt`)까지는 그대로 태워서 CLI 직전 경로를 검증한다."""
+
+    def __init__(self, review_ok: bool = False):
+        self.review_ok = review_ok   # True면 검토/재검사가 '추가 수정 불필요' 판정
+        self.calls: list[dict] = []
+
+    def __call__(self, question, attachments, history, stage, cfg, prior=None, mode="general", plan_len=5,
+                 on_delta=None, on_tick=None, cancel=None):
+        prompt = D.build_prompt(question, history, stage, plan_len, prior, attachments)
+        self.calls.append({"kind": stage["kind"], "who": stage["who"], "history": len(history),
+                           "instruction": stage["instruction"], "prompt": prompt})
+        verdict = D.VERDICT_OK if self.review_ok else D.VERDICT_NEED
+        content = {
+            "initial": "최초 답변입니다.",
+            "review": f"1) 지적 하나.\n{verdict}",
+            "rebuttal": "지적 1 반영. 수정된 답변입니다.",
+            "recheck": f"재검사 결과.\n{verdict}",
+            "final": "최종 답변입니다.",
+        }[stage["kind"]]
+        if on_delta:
+            on_delta(content)
+        if on_tick:
+            on_tick(0.1)
+        return {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
+                "elapsed": 0.1, "meta": {"model": "fake"}, "prompt_chars": len(prompt)}
+
+
+@pytest.fixture
+def fake_stages(monkeypatch):
+    """`fake = fake_stages(review_ok=...)` 로 execute_stage를 바꿔 끼운다."""
+    def make(review_ok: bool = False) -> FakeStages:
+        fake = FakeStages(review_ok)
+        monkeypatch.setattr(D, "execute_stage", fake)
+        return fake
+    return make
