@@ -165,6 +165,22 @@ def test_pause_and_interjection(isolated, fake_stages):
     assert "[사용자 · 개입]\n비상정지는 하드와이어로" in review_prompt
 
 
+def test_code_review_mode_shows_evidence(isolated, fake_stages):
+    """code_review 모드에서 답변의 python 블록이 검사되고(문법 OK 1 · 실패 1) 화면에 검사 결과가 보인다."""
+    fake = fake_stages(review_ok=False)
+    at = boot()
+    select(at, "모드").set_value("code_review")
+    configure(at, stage_count=3, first="claude")
+    assert not checkbox(at, "🔬 코드 블록").value, "코드 실행은 기본으로 꺼져 있어야 함"
+    submit(at, "코드 검토")
+    drive(at)
+    rnd = last_round(at)
+    ev = rnd["stages"][0]["evidence"]
+    assert [(b["check"], b["ok"]) for b in ev] == [("syntax", True), ("syntax", False)]
+    assert "[프로그램 검사 · Claude · Initial의 코드 블록" in fake.calls[1]["prompt"]
+    assert any("코드 검사 2개 블록" in c.value for c in at.caption)
+
+
 def test_unresolved_issues_show_warning(isolated, fake_stages):
     """반박/최종이 [반영/반박 N]을 빼먹으면 라운드가 '미처리 지적' 경고를 단다 (default-FAIL)."""
     fake_stages(review_ok=False, resolve=False)

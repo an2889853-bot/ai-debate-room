@@ -15,6 +15,7 @@ subprocess로 번갈아 호출해 토론을 수행한다. 각 단계에는 직�
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import queue
@@ -23,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -55,6 +57,7 @@ class Config:
     codex_model: str | None = CODEX_AUTO  # 'auto' | 카탈로그 slug | None(=~/.codex/config.toml 기본값)
     codex_effort: str | None = "xhigh"    # 모델이 지원하지 않으면 지원 범위 안에서 가장 가까운 아래 단계로 낮춘다
     timeout: int = 900                    # CLI 호출 1회당 최대 대기 시간(초)
+    run_code: bool = False                # True면 답변의 python 코드 블록을 sandbox\_run에서 실제로 실행해 증거로 붙인다 (문법 검사는 항상)
     claude_exe: str = ""
     codex_exe: str = ""
 
@@ -774,6 +777,8 @@ COMMON_RULES = (
     "- 마크다운을 사용해도 되지만 불필요하게 길게 쓰지 마십시오.\n"
     "- 사용자 발언에 [첨부 파일] 블록이 있으면 그 내용을 근거로 활용하십시오.\n"
     "- 대화 기록에 '[사용자 · 개입]'이 있으면 사용자가 토론 중간에 끼어든 것입니다. 이후 단계는 그 요청을 최우선으로 반영하십시오.\n"
+    "- 대화 기록의 '[프로그램 검사 · ...]' 블록은 사람이 아니라 프로그램이 답변 속 코드 블록을 실제로 검사(문법·파싱·실행)한 결과입니다. "
+    "실패가 있으면 반드시 다루십시오. 통과했다고 해서 논리가 맞다는 뜻은 아닙니다.\n"
 )
 
 VERDICT_OK = "[판정: 추가 수정 불필요]"
@@ -881,6 +886,87 @@ def contract_summary(stages: list[dict]) -> dict:
         if c.get("missing"):
             missing.append((f"{DISPLAY[h['who']]} · {h['label']}", list(c["missing"])))
     return {"issues": total, "accepted": acc, "rejected": rej, "retries": retries, "missing": missing, "ok": not missing}
+
+
+# ---- 코드 블록 검사 (외부 증거) ----
+# 답변 속 ```python 블록은 항상 문법 검사, json/toml은 파싱 검사. cfg.run_code가 켜져 있으면 python 블록을 sandbox\_run에서
+# 실제로 실행해 exit 코드·출력을 잡는다. 결과는 entry["evidence"]에 남고 다음 단계 프롬프트에 '[프로그램 검사 ...]' 블록으로 들어간다
+# — 모델이 "동작한다"고 말하는 것과 별개로 프로그램이 확인한 사실을 토론에 넣기 위해서다.
+CODE_FENCE_RE = re.compile(r"```([\w+.#-]*)[^\n]*\n(.*?)```", re.S)
+CODE_CHECK_LANGS = {"python": "python", "py": "python", "python3": "python", "json": "json", "toml": "toml"}
+RUN_DIR = SANDBOX / "_run"        # 실행용 임시 폴더 (git 제외, 실행 후 삭제)
+CODE_RUN_TIMEOUT = 30             # 블록 1개 실행 제한(초)
+MAX_EVIDENCE_OUTPUT = 1500        # 프롬프트에 넣는 실행 출력 상한(글자)
+
+
+def extract_code_blocks(text: str) -> list[dict]:
+    """``` 펜스 블록을 [{"lang", "code"}] 로 (등장 순서, 언어 태그는 소문자)."""
+    return [{"lang": (m.group(1) or "").strip().lower(), "code": m.group(2)} for m in CODE_FENCE_RE.finditer(text or "")]
+
+
+def _run_python(code: str, timeout: int) -> tuple[bool, str]:
+    """python 블록을 격리 폴더에서 실행. (성공 여부, 'exit N' + 출력 꼬리)."""
+    run_dir = RUN_DIR / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    script = run_dir / "block.py"
+    script.write_text(code, encoding="utf-8")
+    try:
+        r = subprocess.run([sys.executable, "-I", "-X", "utf8", str(script)], cwd=run_dir, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                           env=clean_env(), creationflags=CREATE_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        return False, f"실행 {timeout}초 초과 (무한 루프나 입력 대기?)"
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    out = r.stdout.strip()
+    if r.stderr.strip():
+        out = (out + "\n[stderr]\n" + r.stderr.strip()).strip()
+    return r.returncode == 0, f"exit {r.returncode}" + (f"\n{out[-MAX_EVIDENCE_OUTPUT:]}" if out else " (출력 없음)")
+
+
+def check_code_blocks(text: str, run: bool = False, timeout: int = CODE_RUN_TIMEOUT) -> list[dict]:
+    """검사 가능한 블록만 [{"index", "lang", "lines", "check": syntax|run|parse, "ok", "detail"}]. index는 전체 펜스 순번."""
+    out: list[dict] = []
+    for i, b in enumerate(extract_code_blocks(text), start=1):
+        kind = CODE_CHECK_LANGS.get(b["lang"])
+        if not kind:
+            continue
+        code = b["code"]
+        item = {"index": i, "lang": kind, "lines": len(code.strip("\n").splitlines()), "check": "parse", "ok": True, "detail": ""}
+        try:
+            if kind == "python":
+                ast.parse(code)
+                item.update(check="syntax", detail="문법 OK")
+                if run:
+                    ok, detail = _run_python(code, timeout)
+                    item.update(check="run", ok=ok, detail=detail)
+            elif kind == "json":
+                json.loads(code)
+                item["detail"] = "JSON 파싱 OK"
+            else:
+                tomllib.loads(code)
+                item["detail"] = "TOML 파싱 OK"
+        except SyntaxError as e:
+            item.update(check="syntax", ok=False, detail=f"SyntaxError: {e.msg} (줄 {e.lineno})")
+        except (ValueError, tomllib.TOMLDecodeError) as e:
+            item.update(ok=False, detail=f"{type(e).__name__}: {str(e)[:300]}")
+        out.append(item)
+    return out
+
+
+def render_evidence(h: dict) -> str:
+    """대화 기록에 들어가는 검사 결과 블록 (모델의 말과 구분되도록 별도 머리말)."""
+    lines = [f"[프로그램 검사 · {DISPLAY[h['who']]} · {h['label']}의 코드 블록 — 사람이 아니라 프로그램이 실제로 검사한 결과]"]
+    for b in h.get("evidence", []):
+        lines.append(f"- 블록 {b['index']} ({b['lang']}, {b['lines']}줄) {b['check']}: {'OK' if b['ok'] else '실패'} — {b['detail']}")
+    return "\n".join(lines)
+
+
+def evidence_summary(ev: list[dict]) -> str:
+    ok = sum(1 for b in ev if b["ok"])
+    ran = sum(1 for b in ev if b["check"] == "run")
+    return f"코드 검사 {len(ev)}개 블록 — OK {ok} · 실패 {len(ev) - ok}" + (f" (실행 {ran}개)" if ran else " (문법·파싱만)")
+
 
 # 단계 지시문. {other}는 상대 AI 이름(직전 단계 작성자 또는 다음 검토자)으로 실행 시점에 채워진다 → 순서를 바꿔도 지시문이 맞는다.
 STAGE_TEMPLATES: dict[str, str] = {
@@ -1056,6 +1142,8 @@ def render_transcript(question: str, history: list[dict], attachments: list[dict
     parts = [f"[사용자]\n{question.strip()}{render_attachments(attachments or [])}"]
     for h in history:
         parts.append(f"[{DISPLAY[h['who']]} · {h['label']}]\n{h['content'].strip()}")
+        if h.get("evidence"):
+            parts.append(render_evidence(h))
     return "\n\n".join(parts)
 
 
@@ -1111,6 +1199,9 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     if contract is not None:
         contract.update({"retries": retries, "source": f"{DISPLAY[src['who']]} · {src['label']}"})
         entry["contract"] = contract
+    evidence = check_code_blocks(content, run=cfg.run_code)  # 코드 블록이 있으면 검사해 다음 단계의 증거로
+    if evidence:
+        entry["evidence"] = evidence
     return entry
 
 
@@ -1217,6 +1308,8 @@ def _round_lines(run: dict) -> list[str]:
         lines += [head, h["content"], ""]
         if h.get("contract"):
             lines += [f"> 🧾 {contract_line(h['contract'])}", ""]
+        if h.get("evidence"):
+            lines += [f"> 🔬 {evidence_summary(h['evidence'])}"] + [f"> {ln}" for ln in render_evidence(h).splitlines()[1:]] + [""]
     if run.get("early_stopped"):
         lines += ["> ⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뜀", ""]
     if run.get("status") == "stopped":
@@ -1305,6 +1398,8 @@ def console_event(e: dict) -> None:
         print(f"{bar}\n[{name}]  ({e['elapsed']}s, 입력 {e['prompt_chars']}자)\n{bar}\n{e['content']}\n", flush=True)
         if e.get("contract"):
             print(f"🧾 {contract_line(e['contract'])}\n", flush=True)
+        if e.get("evidence"):
+            print(f"🔬 {evidence_summary(e['evidence'])}\n{render_evidence(e)}\n", flush=True)
     elif e["type"] == "error":
         cli = "claude" if e["who"] == "claude" else "codex"
         print(f"\n❌ 오류 — 단계 {e['index']}/{e['total']} {name} ({cli} CLI)\n{e['error']}\n", flush=True)
@@ -1352,6 +1447,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--codex-model", default=Config.codex_model, help="auto(카탈로그 최상위, 기본) 또는 slug")
     ap.add_argument("--codex-effort", default=Config.codex_effort, help="low/medium/high/xhigh/max/ultra (기본 xhigh, 모델 지원 범위로 자동 조정)")
     ap.add_argument("--timeout", type=int, default=Config.timeout, help="CLI 호출 1회 타임아웃(초)")
+    ap.add_argument("--run-code", action="store_true", help="답변의 python 코드 블록을 sandbox\\_run에서 실제로 실행해 증거로 붙임 (문법 검사는 항상)")
     ap.add_argument("--check", action="store_true", help="두 CLI가 응답하는지만 확인")
     ap.add_argument("--list-codex-models", action="store_true", help="선택 가능한 Codex 모델과 effort 출력")
     ap.add_argument("--no-save", action="store_true", help="chats\\ 에 저장하지 않음")
@@ -1364,7 +1460,8 @@ def main(argv: list[str] | None = None) -> int:
     SANDBOX.mkdir(exist_ok=True)
 
     cfg = Config(claude_model=a.claude_model or None, claude_effort=a.claude_effort or None,
-                 codex_model=a.codex_model or None, codex_effort=a.codex_effort or None, timeout=a.timeout)
+                 codex_model=a.codex_model or None, codex_effort=a.codex_effort or None, timeout=a.timeout,
+                 run_code=a.run_code)
     try:
         cfg.claude_exe = find_claude()
         cfg.codex_exe = find_codex()

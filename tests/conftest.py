@@ -71,8 +71,9 @@ class FakeStages:
                            "instruction": stage["instruction"], "prompt": prompt})
         verdict = D.VERDICT_OK if self.review_ok else D.VERDICT_NEED
         tags = "[반영 1] 근거를 보강했습니다.\n[반박 2] 이미 처리된 항목입니다.\n" if self.resolve else ""
+        code = "\n```python\nprint('hi')\n```\n```python\ndef f(:\n    pass\n```\n" if mode == "code_review" else ""
         content = {
-            "initial": "최초 답변입니다.",
+            "initial": f"최초 답변입니다.{code}",
             "review": (f"[지적 없음]\n{verdict}" if self.review_ok
                        else f"[지적 1] 근거가 약합니다.\n[지적 2] 예외 처리가 빠졌습니다.\n{verdict}"),
             "rebuttal": f"{tags}수정된 답변입니다.",
@@ -89,7 +90,41 @@ class FakeStages:
             c = D.check_contract(issues, content)
             c.update({"retries": 0, "source": f"{D.DISPLAY[src['who']]} · {src['label']}"})
             entry["contract"] = c
+        evidence = D.check_code_blocks(content, run=False)  # 코드 검사도 실제 경로 (실행은 안 함)
+        if evidence:
+            entry["evidence"] = evidence
         return entry
+
+
+class FakeCLI:
+    """call_claude / call_codex 대역: 호출 순서대로 responses를 돌려준다 (마지막 응답은 반복). 프롬프트를 기록."""
+
+    def __init__(self, responses: list[str]):
+        self.responses, self.calls = responses, []
+
+    def claude(self, cfg, system_prompt, prompt, stage, on_delta=None, on_tick=None, cancel=None, images=None):
+        return self._answer(prompt, on_delta)
+
+    def codex(self, cfg, prompt, stage, on_tick=None, cancel=None, images=None):
+        return self._answer(prompt, None)
+
+    def _answer(self, prompt, on_delta):
+        self.calls.append(prompt)
+        text = self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
+        if on_delta:
+            on_delta(text)
+        return text, {"model": "fake"}
+
+
+@pytest.fixture
+def cli(monkeypatch):
+    """`f = cli([응답1, 응답2, ...])` 로 두 CLI 호출을 대역으로 바꾼다 (execute_stage의 실제 경로를 태울 때)."""
+    def make(responses: list[str]) -> FakeCLI:
+        f = FakeCLI(responses)
+        monkeypatch.setattr(D, "call_claude", f.claude)
+        monkeypatch.setattr(D, "call_codex", f.codex)
+        return f
+    return make
 
 
 @pytest.fixture

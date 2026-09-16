@@ -34,7 +34,7 @@ DEFAULT_SETTINGS = {
     "claude_model": "fable", "claude_effort": "xhigh",      # fable 별칭 = 최신 Fable 자동 추적
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
-    "pause_each": False, "autosave": True, "beep": True,
+    "pause_each": False, "autosave": True, "beep": True, "run_code": False,
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -226,6 +226,17 @@ def render_login_flow(flow: "D.LoginFlow") -> None:
         st.rerun()
 
 
+def render_evidence_ui(e: dict) -> None:
+    """코드 블록 검사 결과 (문법/파싱/실행). 실패가 하나라도 있으면 상세를 펼쳐 보인다."""
+    ev = e.get("evidence")
+    if not ev:
+        return
+    bad = [b for b in ev if not b["ok"]]
+    st.caption(("❌ " if bad else "🔬 ") + D.evidence_summary(ev))
+    if bad:
+        st.code("\n".join(D.render_evidence(e).splitlines()[1:]), language="text")
+
+
 def render_entry(e: dict, expanded: bool = False) -> None:
     who, label = e["who"], e["label"]
     if who == "user":
@@ -243,6 +254,7 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 st.markdown(e["content"])
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
+                render_evidence_ui(e)
         else:
             with st.expander(f"**{name}**  ·  {e.get('elapsed', 0)}s", expanded=expanded):
                 if used:
@@ -250,6 +262,7 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 st.markdown(e["content"])
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
+                render_evidence_ui(e)
 
 
 def render_contract_summary(stages: list[dict]) -> None:
@@ -408,6 +421,9 @@ with st.sidebar:
     mode = st.selectbox("모드", mode_keys, index=mode_keys.index(s["mode"]) if s["mode"] in mode_keys else 0,
                         format_func=lambda k: D.MODES[k]["name"], disabled=busy)
     st.caption(D.MODES[mode]["description"])
+    run_code = st.checkbox("🔬 코드 블록 실제 실행 (python · sandbox\\_run)", value=bool(s.get("run_code", False)), disabled=busy,
+                           help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
+                                "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
 
     order_mode = st.radio("순서", ["기본", "직접 편집"], index=1 if s["use_custom"] else 0, horizontal=True, disabled=busy,
                           help="기본: 먼저 답하는 AI와 최종 정리 AI만 고르면 나머지 역할이 자동으로 정해짐. 직접 편집: 표에서 단계를 하나씩 구성")
@@ -514,7 +530,7 @@ with st.sidebar:
     CFG = D.Config(
         claude_model=None if claude_model.startswith("(") else claude_model,
         claude_effort=None if claude_effort.startswith("(") else claude_effort,
-        codex_model=codex_model, codex_effort=codex_effort, timeout=timeout,
+        codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
     )
     rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
     st.caption("현재 설정 → " + (
@@ -526,7 +542,7 @@ with st.sidebar:
     new_settings = {"claude_model": claude_model, "claude_effort": claude_effort,
                     "codex_model": codex_model or s["codex_model"], "codex_effort": codex_effort or "(기본)",
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
-                    "pause_each": pause_each, "autosave": autosave, "beep": do_beep,
+                    "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:

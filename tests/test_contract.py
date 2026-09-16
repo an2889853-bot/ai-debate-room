@@ -62,37 +62,7 @@ def test_review_templates_carry_issue_format_rule():
             assert "[반영 N]" in s["instruction"] and "[반박 N]" in s["instruction"]
 
 
-# ---- execute_stage: 재요청 (call_claude / call_codex 대역) ------------------------------
-class FakeCLI:
-    """호출 순서대로 responses를 돌려준다. 마지막 응답은 반복."""
-
-    def __init__(self, responses: list[str]):
-        self.responses, self.calls = responses, []
-
-    def claude(self, cfg, system_prompt, prompt, stage, on_delta=None, on_tick=None, cancel=None, images=None):
-        return self._answer(prompt, on_delta)
-
-    def codex(self, cfg, prompt, stage, on_tick=None, cancel=None, images=None):
-        return self._answer(prompt, None)
-
-    def _answer(self, prompt, on_delta):
-        self.calls.append(prompt)
-        text = self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
-        if on_delta:
-            on_delta(text)
-        return text, {"model": "fake"}
-
-
-@pytest.fixture
-def cli(monkeypatch):
-    def make(responses: list[str]) -> FakeCLI:
-        f = FakeCLI(responses)
-        monkeypatch.setattr(D, "call_claude", f.claude)
-        monkeypatch.setattr(D, "call_codex", f.codex)
-        return f
-    return make
-
-
+# ---- execute_stage: 재요청 (call_claude / call_codex 대역 = conftest.cli) ---------------------
 def test_complete_answer_needs_no_retry(cli):
     f = cli([FULL])
     e = D.execute_stage("q", [], HISTORY, final_stage(), D.Config(), plan_len=3)   # who=gpt → codex 경로
