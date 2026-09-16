@@ -111,6 +111,10 @@ def test_three_stage_round_end_to_end(isolated, fake_stages):
     assert rnd["stages"][-1]["contract"]["resolved"] == {1: "반영", 2: "반박"}
     assert rnd["contract"]["ok"] and rnd["contract"]["issues"] == 2
     assert any("검토 지적 2건 전부 처리됨" in c.value for c in at.caption)
+    # 관측: 단계 캡션의 토큰, 라운드 합계, 저장 dict의 usage
+    assert any("1.0k→200 토큰 · API 환산 $0.010" in c.value for c in at.caption)
+    assert any(c.value.startswith("⏱ 합계") and "토큰 2.9k (Claude 2.4k · GPT 500)" in c.value for c in at.caption)
+    assert rnd["usage"]["tokens"] == 2900 and rnd["usage"]["known"] == 3
     # 자동 저장: 격리된 chats 폴더에 json + md
     saved = list((isolated / "chats").glob("*.json"))
     assert len(saved) == 1 and saved[0].with_suffix(".md").exists()

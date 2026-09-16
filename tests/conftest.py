@@ -87,8 +87,12 @@ class FakeStages:
             on_delta(content)
         if on_tick:
             on_tick(0.1)
+        # 실제 CLI meta와 같은 모양의 토큰 정보 (Claude: usage dict + 비용, GPT: 총 토큰만)
+        meta = ({"models": ["claude-fake"], "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 0,
+                                                     "cache_read_input_tokens": 0, "output_tokens": 200}, "cost_usd": 0.01}
+                if stage["who"] == "claude" else {"model": "gpt-fake", "usage": {"total": 500}})
         entry = {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
-                 "elapsed": 0.1, "meta": {"model": "fake"}, "prompt_chars": len(prompt)}
+                 "elapsed": 0.1, "meta": meta, "prompt_chars": len(prompt)}
         if issues:  # execute_stage와 같은 형태로 계약 결과를 붙인다 (재요청은 흉내 내지 않음)
             c = D.check_contract(issues, content)
             c.update({"retries": 0, "source": f"{D.DISPLAY[src['who']]} · {src['label']}"})

@@ -31,7 +31,7 @@ claude -p --output-format stream-json|json --tools "" --no-session-persistence -
        --system-prompt <규칙> [--model X] [--effort Y] [--verbose --include-partial-messages] [--input-format stream-json]
 ```
 - `--tools ""` 도구 전부 비활성화(텍스트 토론만), `--no-session-persistence` 세션 파일 없음, `--strict-mcp-config` MCP 안 읽음.
-- `on_delta`가 있으면 stream-json(`--verbose` 필수)으로 `content_block_delta/text_delta`를 누적해 넘기고, 마지막 `type=result` 이벤트에서 결과·meta(`modelUsage` 등)를 읽는다. 없으면 json 한 덩어리.
+- `on_delta`가 있으면 stream-json(`--verbose` 필수)으로 `content_block_delta/text_delta`를 누적해 넘기고, 마지막 `type=result` 이벤트에서 결과·meta를 읽는다. 없으면 json 한 덩어리. meta = `{session_id, duration_ms, usage(input/cache_creation/cache_read/output_tokens …), cost_usd(total_cost_usd — API 환산, 구독이면 실제 과금 아님), models}`.
 - 이미지가 있으면 `--input-format stream-json`으로 `{"type":"user","message":{"content":[text, {"type":"image","source":{"type":"base64",...}}]}}` 한 줄을 stdin에 넣는다 (도구 불필요).
 - `--bare`는 OAuth를 읽지 않아 구독 계정으로 못 쓴다 → 사용하지 않음.
 
@@ -41,7 +41,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
            [-m X] [-c model_reasoning_effort=Y] [-i 이미지경로]... -
 ```
 - 시스템 프롬프트 옵션이 없어 규칙을 프롬프트 맨 앞에 붙인다. 마지막 메시지는 `-o` 파일에서 읽는다(stdout엔 헤더·로그가 섞임).
-- 실제 적용된 model/effort는 시작 헤더(stderr)의 `model:` / `reasoning effort:` 줄에서 뽑아 meta에 담는다.
+- 실제 적용된 model/effort는 시작 헤더(stderr)의 `model:` / `reasoning effort:` 줄에서 뽑아 meta에 담는다. 출력에 `tokens used: N` 줄이 있으면 `meta.usage = {"total": N}`(입력/출력 구분 없음), 없으면 `None` — 지금 버전은 안 찍는 것으로 보여 GPT 토큰은 대개 `?`.
 - `exec --json`은 `item.completed`(완성본)만 내보내고 델타가 없어 **글자 단위 스트리밍 불가** → UI는 경과 시간만 표시.
 - 미로그인: exit 1 + stderr `401 Unauthorized`, `-o` 파일 미생성. API 400(미지원 effort 등): stderr JSON의 `message`를 뽑아 "API 오류: ..."로 표시.
 - effort는 `-c model_reasoning_effort=high`처럼 따옴표 없이 넘긴다(TOML 파싱 실패 시 문자열 리터럴로 처리됨).
@@ -95,14 +95,14 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 ### 2.5 저장
 
 - 대화 1개 = `chats\<YYYYmmdd_HHMM>_<주제슬러그>.json` + 같은 이름 `.md`. `new_conversation(question)` → `{id, title, created, updated, rounds: []}`. 제목 `make_title()`(질문 첫 줄, 마크다운 기호 제거, 28자), 파일명 `slugify()`(한글 유지, Windows 금지 문자 제거, 30자).
-- 라운드 dict: `question, attachments, mode, rounds, stage_count, stages[], early_stopped, started, finished, prior_rounds, first, final_who, plan(라벨 목록), plan_steps([[who, kind], ...] — 재개용), config(Config asdict), contract(`contract_summary` 합계), evaluation(`eval_summary`), status(done|stopped|error), error`.
+- 라운드 dict: `question, attachments, mode, rounds, stage_count, stages[], early_stopped, started, finished, prior_rounds, first, final_who, plan(라벨 목록), plan_steps([[who, kind], ...] — 재개용), config(Config asdict), contract(`contract_summary` 합계), evaluation(`eval_summary`), usage(`usage_summary`), status(done|stopped|error), error`.
   **주의**: `stages`는 실행된 단계 항목 목록이고 단계 수는 `stage_count`다.
 - 단계 항목(entry): `{who, label, kind, content, elapsed, meta, prompt_chars, contract?, evidence?}`. `contract`는 반박/최종이 직전 지적을 검사받았을 때만 있으며 JSON 저장 후엔 `resolved`의 키가 문자열이 된다. `evidence`는 답변에 검사 가능한 코드 블록이 있을 때만. 사용자 개입은 `interjection_entry(text)` = `{who: "user", label: "개입", kind: "interjection", ...}`.
 - `save_conversation(conv)`, `list_conversations()`(최신순; 구 `runs\` 기록은 `legacy=True`로 1라운드 대화처럼 포함), `load_conversation(path)`.
 
 ### 2.6 콘솔 `debate.py`
 
-`python debate.py "질문"` 또는 `-q`. 옵션: `--file`(반복), `--mode`, `--stages 3|5`, `--rounds`(5단계일 때만 의미), `--first claude|gpt`, `--final-who`, `--plan claude:initial,gpt:review,...`, `--no-early-stop`, `--max-stage N`(테스트용), `--claude-model/--claude-effort`, `--codex-model/--codex-effort`, `--timeout`, `--check`(두 CLI 응답 확인), `--list-codex-models`, `--no-save`.
+`python debate.py "질문"` 또는 `-q`. 옵션: `--file`(반복), `--mode`, `--stages 3|5`, `--rounds`(5단계일 때만 의미), `--first claude|gpt`, `--final-who`, `--plan claude:initial,gpt:review,...`, `--no-early-stop`, `--max-stage N`(테스트용), `--claude-model/--claude-effort`, `--codex-model/--codex-effort`, `--timeout`, `--check`(두 CLI 응답 확인), `--list-codex-models`, `--stats`(저장된 대화 전체 통계), `--no-save`.
 `run_debate(question, cfg, max_stage, on_event, prior, attachments, rounds, mode, early_stop, first, final_who, custom, stage_count)`가 계획을 순차 실행하며 `on_event`로 `start / done / error / skip / revise` 이벤트를 보낸다. `console_event`는 done 항목에 `contract`가 있으면 🧾 한 줄(`contract_line`)을, `evidence`가 있으면 🔬 요약(`evidence_summary`)과 검사 블록을 더 찍고, run dict에 `contract` 합계가 들어간다. `.md` 내보내기도 항목 아래에 `> 🧾 ...` / `> 🔬 ...`를 남긴다.
 
 ### 2.7 계정
@@ -110,7 +110,13 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 `claude_auth_status(exe)` = `claude auth status --json` → `{loggedIn, email, subscriptionType, authMethod, detail}`. `codex_auth_status(exe)` = `codex login status`(exit 0 = Logged in). 로그아웃 `claude auth logout` / `codex logout`. `LoginFlow`는 `claude auth login` / `codex login --device-auth`를 백그라운드로 띄우고 출력(ANSI 제거, 글자 단위)에서 URL·코드를 뽑는다.
 **위험**: `codex login --device-auth`는 시작하는 순간 기존 로그인을 지운다. Claude 로그아웃은 `~\.claude\.credentials.json`을 공유하는 VS Code Claude Code까지 풀린다.
 
-### 2.8 실행 파일 탐색
+### 2.8 관측 — 토큰·비용·시간
+
+- `usage_of(entry)` → `{in, out, total, cost_usd}`: Claude는 입력=input+cache_creation+cache_read, 출력=output, 비용=meta.cost_usd; GPT는 총 토큰만(알 때); 모르면 None. `usage_line(entry)` 캡션 한 줄("12.0k→6.8k 토큰 · API 환산 $0.123" / "총 4.3k 토큰" / 빈 문자열).
+- `usage_summary(stages)` 라운드 합계 `{stages, elapsed, tokens, known(토큰을 아는 단계 수), cost_usd, by_who}`, `usage_summary_line()` — "⏱ 합계 127s (3단계) · 토큰 23.1k (Claude 18.7k · GPT ?) · API 환산 $0.12 · 토큰 미확인 1단계". 라운드 dict와 run dict에 `usage`로 저장.
+- `stats(conversations)` 저장된 대화 전체 집계(라운드·완료·조기 종료, AI별 단계 수·평균 시간, 토큰·비용·총 시간, 반영 계약 지적/반영/반박/재요청/미처리 라운드, 독립 평가 PASS/NEEDS_WORK/재작성) + `stats_lines()` 사람이 읽는 줄. 구 기록처럼 `contract`/`evaluation` 키가 없으면 단계에서 다시 계산. 콘솔 `debate.py --stats`, 사이드바 "📊 통계" 확장(`load_stats` — (경로, updated) 튜플로 `st.cache_data` 10분).
+
+### 2.9 실행 파일 탐색
 
 `find_claude()`: PATH `claude` → `~\.local\bin\claude.exe`. `find_codex()`: PATH의 `.exe` → winget 설치 경로(`CODEX_WINGET_EXE`) → `codex.cmd` 래퍼. 없으면 `FileNotFoundError`에 설치 명령을 담아 올린다.
 
@@ -124,7 +130,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 
 ### 3.2 사이드바
 
-저장된 대화 선택(chats + 구 runs), 새 대화, `.md` 내려받기, 삭제(2단계 확인) · 모드 · **순서**: 라디오 "기본"(대화 단계 수 3/5, 먼저 답하는 AI, 최종 정리 AI, 5단계일 때만 검토↔반박 라운드 수) / "직접 편집"(`st.data_editor` 표 — AI, 역할; `ss.plan_base` + `plan_nonce` 키로 편집 상태 관리, 편집본을 다시 data로 넣으면 이중 적용되므로 base는 고정; "기본 순서로 되돌리기") · 조기 종료 체크 · 단계마다 멈춤 체크 · "🧑‍⚖️ FINAL 뒤 독립 평가"(기본 켬; 직접 편집이면 표에 '평가' 행을 넣어야 함) · "NEEDS_WORK면 FINAL 1회 재작성 후 재평가"(기본 켬) · "🔬 코드 블록 실제 실행"(모드 아래, 기본 끔) · 순서 미리보기 캡션(`plan_preview`) · Claude 모델·effort · Codex 모델(카탈로그 + 직접 입력)·모델별 effort · 타임아웃 · 자동 저장 · 소리 · "현재 설정 →" 캡션 · "🔍 현재 설정으로 CLI 점검"(두 CLI를 실제로 한 번 호출) · "🔐 계정" 패널(상태 `get_auth()`가 `AUTH_TTL=120초`마다 재조회, 로그인/로그아웃).
+저장된 대화 선택(chats + 구 runs), "📊 통계 (저장된 대화 전체)" 확장, 새 대화, `.md` 내려받기, 삭제(2단계 확인) · 모드 · **순서**: 라디오 "기본"(대화 단계 수 3/5, 먼저 답하는 AI, 최종 정리 AI, 5단계일 때만 검토↔반박 라운드 수) / "직접 편집"(`st.data_editor` 표 — AI, 역할; `ss.plan_base` + `plan_nonce` 키로 편집 상태 관리, 편집본을 다시 data로 넣으면 이중 적용되므로 base는 고정; "기본 순서로 되돌리기") · 조기 종료 체크 · 단계마다 멈춤 체크 · "🧑‍⚖️ FINAL 뒤 독립 평가"(기본 켬; 직접 편집이면 표에 '평가' 행을 넣어야 함) · "NEEDS_WORK면 FINAL 1회 재작성 후 재평가"(기본 켬) · "🔬 코드 블록 실제 실행"(모드 아래, 기본 끔) · 순서 미리보기 캡션(`plan_preview`) · Claude 모델·effort · Codex 모델(카탈로그 + 직접 입력)·모델별 effort · 타임아웃 · 자동 저장 · 소리 · "현재 설정 →" 캡션 · "🔍 현재 설정으로 CLI 점검"(두 CLI를 실제로 한 번 호출) · "🔐 계정" 패널(상태 `get_auth()`가 `AUTH_TTL=120초`마다 재조회, 로그인/로그아웃).
 
 ### 3.3 라운드 실행
 
@@ -139,12 +145,12 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 
 ### 3.4 렌더링
 
-`render_round(run)` → `render_user()`(질문, 첨부 목록, 이미지 4열, 설정 요약 `config_line` = "모드 · N단계 · Claude 모델/effort · GPT 모델/effort"; N은 `round_stage_count(run)` = `count_debate_stages(plan_steps)` — 평가 단계와 재작성 FINAL 2는 세지 않음, 구 기록은 rounds×2+3) + `render_entry()`(Claude 🟠 / GPT 🟢 / 사용자 🧑 말풍선, 중간 단계 접기, FINAL·FINAL 2 주황 제목, 평가 항목은 제목에 "✅ PASS / ⚠ NEEDS_WORK" 배지, 실제 적용 모델/effort 캡션 `used_models`, 계약 결과가 있으면 🧾 캡션 `D.contract_line`, 코드 검사 결과가 있으면 `render_evidence_ui` — 🔬 요약 캡션, 실패가 있으면 ❌와 상세 코드 블록). 라운드 끝에 `render_contract_summary(stages)` — 지적이 하나라도 검사됐으면 전부 처리 시 "✅ 검토 지적 N건 전부 처리됨 (반영 a · 반박 b)" 캡션, 미처리가 있으면 `st.warning`("⚠ 미처리 지적: 단계 → 번호 ... FINAL을 그대로 믿기 전에 확인"). `render_eval_summary()` — "🧑‍⚖️ 독립 평가: PASS (FINAL 재작성 후 재평가)" 캡션 또는 NEEDS_WORK 경고. 조기 종료·중단 캡션. 일시정지의 "⏭ 바로 FINAL로"는 다음 단계가 final/evaluate면 비활성.
+`render_round(run)` → `render_user()`(질문, 첨부 목록, 이미지 4열, 설정 요약 `config_line` = "모드 · N단계 · Claude 모델/effort · GPT 모델/effort"; N은 `round_stage_count(run)` = `count_debate_stages(plan_steps)` — 평가 단계와 재작성 FINAL 2는 세지 않음, 구 기록은 rounds×2+3) + `render_entry()`(Claude 🟠 / GPT 🟢 / 사용자 🧑 말풍선, 중간 단계 접기, FINAL·FINAL 2 주황 제목, 평가 항목은 제목에 "✅ PASS / ⚠ NEEDS_WORK" 배지, 실제 적용 모델/effort + 토큰·비용 캡션 `used_models` + `D.usage_line`, 계약 결과가 있으면 🧾 캡션 `D.contract_line`, 코드 검사 결과가 있으면 `render_evidence_ui` — 🔬 요약 캡션, 실패가 있으면 ❌와 상세 코드 블록). 라운드 끝에 `render_contract_summary(stages)` — 지적이 하나라도 검사됐으면 전부 처리 시 "✅ 검토 지적 N건 전부 처리됨 (반영 a · 반박 b)" 캡션, 미처리가 있으면 `st.warning`("⚠ 미처리 지적: 단계 → 번호 ... FINAL을 그대로 믿기 전에 확인"). `render_eval_summary()` — "🧑‍⚖️ 독립 평가: PASS (FINAL 재작성 후 재평가)" 캡션 또는 NEEDS_WORK 경고. 그 아래 `usage_summary_line` 캡션(합계 시간·토큰·API 환산 비용). 조기 종료·중단 캡션. 일시정지의 "⏭ 바로 FINAL로"는 다음 단계가 final/evaluate면 비활성.
 
 ## 4. 테스트 — tests\
 
 - 원칙: **실제 claude/codex를 호출하지 않는다.** `conftest.isolated` 픽스처가 `D.CHATS/IMAGE_DIR/RUNS`를 임시 폴더로, `find_claude/find_codex/claude_auth_status/codex_auth_status/list_codex_models/winsound.MessageBeep`를 가짜로 바꾸고 `ui_settings.json`을 전후로 보존한다. `fake_stages(review_ok)`는 `D.execute_stage`를 `FakeStages`(단계별 고정 답변, `build_prompt`까지는 실제 경로, 호출 내역 기록)로 바꿔 끼운다.
-- `test_plan.py`: 계획·검증·판정·프롬프트·콘솔 엔진(run_debate)·파일명. `test_contract.py`: 지적/판정 파싱, 프롬프트 블록, `execute_stage`의 재요청(`call_claude`/`call_codex`를 대역으로 바꿔 실제 재시도 경로를 태움), 라운드 합계, run_debate 계약. `test_eval.py`: 평가 계획·검증 규칙·판정 파싱·`adjust_plan_after`(건너뛰기·재작성 1회)·`final_of`·run_debate 종단(NEEDS_WORK → FINAL 2 계약 검사 → PASS). `test_evidence.py`: 펜스 추출, 문법/파싱 검사, 실제 파이썬 실행(성공·exit 코드·타임아웃·stdin 차단), 다음 단계 프롬프트 전달, run_code 옵션. `test_app.py`: `streamlit.testing.v1.AppTest`로 실제 UI 종단(3단계 완주·저장, 5단계 완주, 조기 종료, 일시정지·개입·계속, 중단·이어서 진행). AppTest는 app.py를 같은 프로세스에서 실행하므로 `import debate as D`가 패치된 모듈을 본다.
+- `test_plan.py`: 계획·검증·판정·프롬프트·콘솔 엔진(run_debate)·파일명. `test_contract.py`: 지적/판정 파싱, 프롬프트 블록, `execute_stage`의 재요청(`call_claude`/`call_codex`를 대역으로 바꿔 실제 재시도 경로를 태움), 라운드 합계, run_debate 계약. `test_eval.py`: 평가 계획·검증 규칙·판정 파싱·`adjust_plan_after`(건너뛰기·재작성 1회)·`final_of`·run_debate 종단(NEEDS_WORK → FINAL 2 계약 검사 → PASS). `test_usage.py`: 토큰·비용 해석(Claude/GPT/모름), 캡션 문자열, Codex `tokens used` 정규식, 라운드 합계, 전체 통계·빈 통계. `test_evidence.py`: 펜스 추출, 문법/파싱 검사, 실제 파이썬 실행(성공·exit 코드·타임아웃·stdin 차단), 다음 단계 프롬프트 전달, run_code 옵션. `test_app.py`: `streamlit.testing.v1.AppTest`로 실제 UI 종단(3단계 완주·저장, 5단계 완주, 조기 종료, 일시정지·개입·계속, 중단·이어서 진행). AppTest는 app.py를 같은 프로세스에서 실행하므로 `import debate as D`가 패치된 모듈을 본다.
 - 실행 `.venv\Scripts\python.exe -m pytest` (약 3초).
 
 ## 5. 실행 환경

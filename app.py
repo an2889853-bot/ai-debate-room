@@ -120,6 +120,18 @@ def get_auth(force: bool = False) -> dict:
     return ss.auth
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def load_stats(keys: tuple) -> dict:
+    """저장된 대화 전체 통계. keys=(경로, 수정 시각) 튜플 — 파일이 바뀌면 다시 계산."""
+    convs = []
+    for path, _ in keys:
+        try:
+            convs.append(D.load_conversation(path))
+        except (OSError, ValueError):
+            pass
+    return D.stats(convs)
+
+
 @st.cache_data(ttl=3600, show_spinner="Codex 모델 목록 조회 중...")
 def load_codex_models() -> list[dict]:
     try:
@@ -252,7 +264,7 @@ def render_entry(e: dict, expanded: bool = False) -> None:
             st.markdown(f"**💬 중간 개입**  \n{e['content']}")
         return
     name = f"{NAME[who]} · {label}"
-    used = used_models(e)
+    used = " · ".join(x for x in (used_models(e), D.usage_line(e)) if x)
     if e.get("kind") == "evaluate":
         v = D.eval_verdict(e)
         name += "  —  " + ("✅ PASS" if v == "PASS" else "⚠ NEEDS_WORK" if v == "NEEDS_WORK" else "❔ 판정 형식 없음")
@@ -310,6 +322,8 @@ def render_round(run: dict) -> None:
         render_entry(e)
     render_contract_summary(run.get("stages", []))
     render_eval_summary(run.get("stages", []))
+    if D.usage_summary_line(run.get("stages", [])):
+        st.caption(D.usage_summary_line(run.get("stages", [])))
     if run.get("early_stopped"):
         st.caption("⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뛰었습니다.")
     if run.get("status") == "stopped":
@@ -433,6 +447,12 @@ with st.sidebar:
                     st.rerun()
     else:
         st.caption("저장된 대화가 없습니다.")
+    with st.expander("📊 통계 (저장된 대화 전체)"):
+        try:
+            for line in D.stats_lines(load_stats(tuple(sorted((c["path"], c.get("updated", "")) for c in convs)))):
+                st.caption(line)
+        except Exception as e:  # noqa: BLE001
+            st.caption(f"통계 계산 실패: {e}")
     if ss.conv:
         st.download_button("⬇ 이 대화 .md 내려받기", data=D.conversation_markdown(ss.conv),
                            file_name=f"{ss.conv['id']}.md", mime="text/markdown", width="stretch")
@@ -653,7 +673,7 @@ def finalize_active(status: str, error: str | None = None) -> None:
     round_.update({"plan": [st_["label"] for st_ in active["plan"]],
                    "plan_steps": [[st_["who"], st_["kind"]] for st_ in active["plan"]],  # 재개용
                    "config": D.asdict(active["cfg"]), "contract": D.contract_summary(active["stages"]),
-                   "evaluation": D.eval_summary(active["stages"]),
+                   "evaluation": D.eval_summary(active["stages"]), "usage": D.usage_summary(active["stages"]),
                    "status": status, "error": error, "finished": now})
     if ss.conv is None:
         ss.conv = D.new_conversation(active["question"])
