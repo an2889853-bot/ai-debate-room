@@ -62,6 +62,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
   - `{target}` (review) — 첫 검토는 "최초 답변", 이후는 "최신 수정본". `{round_note}` — 2회차부터 "이미 해결된 지적은 반복하지 말라".
   - `{fb_note}` (final) — 계획에 앞선 rebuttal이 없으면(3단계) "검토 지적을 항목별로 판정해(타당하면 반영, 틀리면 근거로 반박) 최종 답변에 녹여라"; 있으면 빈 문자열.
 - 판정 계약: review/recheck 지시문 끝에 `VERDICT_RULE` — 답변 **맨 마지막 줄**에 `[판정: 수정 필요]` 또는 `[판정: 추가 수정 불필요]`. `reviewer_says_ok(entry)`가 `VERDICT_OK_RE`(공백 허용)로 판정하며 사용자 발언은 항상 False. `early_stop`이면 review 뒤 '불필요' 판정 시 남은 단계를 건너뛰고 final로 간다(run_debate와 app.py 양쪽에 같은 로직; 3단계는 review 바로 뒤가 final이라 건너뛸 게 없다).
+- **지적 번호별 반영 계약 (default-FAIL)**: review/recheck 지시문에 `ISSUE_FORMAT_RULE` — 지적은 한 줄에 하나씩 `[지적 N] ...`(번호는 1부터, 없으면 `[지적 없음]`). 그에 답하는 rebuttal/final(`RESPOND_KINDS`)은 번호마다 `[반영 N] 한 줄` 또는 `[반박 N] 근거`를 써야 한다. `execute_stage()`가 `open_issues(history)`(직전 AI 단계가 review/recheck면 그 지적들, 사용자 개입은 건너뜀)로 검사 대상을 정해 프롬프트 끝에 `contract_block` "=== 처리해야 할 지적 ==="을 붙이고, 응답을 `check_contract()`로 검사해 빠진 번호가 있으면 `retry_note`를 덧붙여 **같은 단계를 재요청**(`MAX_CONTRACT_RETRIES=1`). 결과는 `entry["contract"] = {issues, resolved: {N: 반영|반박}, missing, retries, source}`(검사할 지적이 없으면 키 없음). 라운드 합계 `contract_summary(stages)` → `{issues, accepted, rejected, retries, missing: [(단계명, [N...])], ok}`. 재요청 후에도 빠지면 라운드가 "미처리 지적" 경고를 단다 — 모델이 "반영했다"고 말하는 것이 아니라 번호별 기록이 있어야 처리로 본다. 5단계에서는 rebuttal이 review의 지적을, final이 recheck의 지적을 검사받는다. 조기 종료로 rebuttal을 건너뛰어도 review에 지적이 남아 있으면 final이 검사받는다. 파싱은 굵게·목록 기호가 붙어도 인식(`ISSUE_RE`, `RESOLVE_RE`), 같은 번호는 지적은 첫 줄·판정은 마지막이 유효.
 - 모드 프리셋 `MODES`: general / code_review / plc(GX Works2·Q 시리즈 래더 검증 체크리스트) / invest. 각각 `name`, `description`, `rules`(시스템 규칙에 덧붙임), `hints`(단계별 지시 덧붙임).
 
 ### 2.3 프롬프트
@@ -77,6 +78,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
   당신은 GPT입니다. <instruction>  머리말 붙이지 말고 본문만.
   ```
 - 같은 대화의 이어지는 질문에는 이전 라운드들의 질문+FINAL(`final_of(run)`)이 `prior`로 들어간다.
+- 반박/최종 단계에 직전 검토의 지적이 있으면 끝에 `=== 처리해야 할 지적 (직전 [Claude · Review]) ===` 블록(지적 목록 + "N = 1, 2, 3 각각에 [반영 N]/[반박 N]")이 붙고, 재요청이면 `=== 재요청 ===` 블록이 더 붙는다.
 - 이미지는 매 단계 다시 전달된다 (`image_attachments()`), stateless이므로.
 
 ### 2.4 첨부
@@ -91,15 +93,15 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 ### 2.5 저장
 
 - 대화 1개 = `chats\<YYYYmmdd_HHMM>_<주제슬러그>.json` + 같은 이름 `.md`. `new_conversation(question)` → `{id, title, created, updated, rounds: []}`. 제목 `make_title()`(질문 첫 줄, 마크다운 기호 제거, 28자), 파일명 `slugify()`(한글 유지, Windows 금지 문자 제거, 30자).
-- 라운드 dict: `question, attachments, mode, rounds, stage_count, stages[], early_stopped, started, finished, prior_rounds, first, final_who, plan(라벨 목록), plan_steps([[who, kind], ...] — 재개용), config(Config asdict), status(done|stopped|error), error`.
+- 라운드 dict: `question, attachments, mode, rounds, stage_count, stages[], early_stopped, started, finished, prior_rounds, first, final_who, plan(라벨 목록), plan_steps([[who, kind], ...] — 재개용), config(Config asdict), contract(`contract_summary` 합계), status(done|stopped|error), error`.
   **주의**: `stages`는 실행된 단계 항목 목록이고 단계 수는 `stage_count`다.
-- 단계 항목(entry): `{who, label, kind, content, elapsed, meta, prompt_chars}`. 사용자 개입은 `interjection_entry(text)` = `{who: "user", label: "개입", kind: "interjection", ...}`.
+- 단계 항목(entry): `{who, label, kind, content, elapsed, meta, prompt_chars, contract?}`. `contract`는 반박/최종이 직전 지적을 검사받았을 때만 있으며 JSON 저장 후엔 `resolved`의 키가 문자열이 된다. 사용자 개입은 `interjection_entry(text)` = `{who: "user", label: "개입", kind: "interjection", ...}`.
 - `save_conversation(conv)`, `list_conversations()`(최신순; 구 `runs\` 기록은 `legacy=True`로 1라운드 대화처럼 포함), `load_conversation(path)`.
 
 ### 2.6 콘솔 `debate.py`
 
 `python debate.py "질문"` 또는 `-q`. 옵션: `--file`(반복), `--mode`, `--stages 3|5`, `--rounds`(5단계일 때만 의미), `--first claude|gpt`, `--final-who`, `--plan claude:initial,gpt:review,...`, `--no-early-stop`, `--max-stage N`(테스트용), `--claude-model/--claude-effort`, `--codex-model/--codex-effort`, `--timeout`, `--check`(두 CLI 응답 확인), `--list-codex-models`, `--no-save`.
-`run_debate(question, cfg, max_stage, on_event, prior, attachments, rounds, mode, early_stop, first, final_who, custom, stage_count)`가 계획을 순차 실행하며 `on_event`로 `start / done / error / skip` 이벤트를 보낸다.
+`run_debate(question, cfg, max_stage, on_event, prior, attachments, rounds, mode, early_stop, first, final_who, custom, stage_count)`가 계획을 순차 실행하며 `on_event`로 `start / done / error / skip` 이벤트를 보낸다. `console_event`는 done 항목에 `contract`가 있으면 🧾 한 줄(`contract_line`)을 더 찍고, run dict에 `contract` 합계가 들어간다. `.md` 내보내기도 항목 아래에 `> 🧾 ...`를 남긴다.
 
 ### 2.7 계정
 
@@ -135,12 +137,12 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 
 ### 3.4 렌더링
 
-`render_round(run)` → `render_user()`(질문, 첨부 목록, 이미지 4열, 설정 요약 `config_line` = "모드 · N단계 · Claude 모델/effort · GPT 모델/effort"; N은 `round_stage_count(run)` = plan_steps 길이 또는 구 기록은 rounds×2+3) + `render_entry()`(Claude 🟠 / GPT 🟢 / 사용자 🧑 말풍선, 중간 단계 접기, FINAL 주황 제목, 실제 적용 모델/effort 캡션 `used_models`). 조기 종료·중단 캡션.
+`render_round(run)` → `render_user()`(질문, 첨부 목록, 이미지 4열, 설정 요약 `config_line` = "모드 · N단계 · Claude 모델/effort · GPT 모델/effort"; N은 `round_stage_count(run)` = plan_steps 길이 또는 구 기록은 rounds×2+3) + `render_entry()`(Claude 🟠 / GPT 🟢 / 사용자 🧑 말풍선, 중간 단계 접기, FINAL 주황 제목, 실제 적용 모델/effort 캡션 `used_models`, 계약 결과가 있으면 🧾 캡션 `D.contract_line`). 라운드 끝에 `render_contract_summary(stages)` — 지적이 하나라도 검사됐으면 전부 처리 시 "✅ 검토 지적 N건 전부 처리됨 (반영 a · 반박 b)" 캡션, 미처리가 있으면 `st.warning`("⚠ 미처리 지적: 단계 → 번호 ... FINAL을 그대로 믿기 전에 확인"). 조기 종료·중단 캡션.
 
 ## 4. 테스트 — tests\
 
 - 원칙: **실제 claude/codex를 호출하지 않는다.** `conftest.isolated` 픽스처가 `D.CHATS/IMAGE_DIR/RUNS`를 임시 폴더로, `find_claude/find_codex/claude_auth_status/codex_auth_status/list_codex_models/winsound.MessageBeep`를 가짜로 바꾸고 `ui_settings.json`을 전후로 보존한다. `fake_stages(review_ok)`는 `D.execute_stage`를 `FakeStages`(단계별 고정 답변, `build_prompt`까지는 실제 경로, 호출 내역 기록)로 바꿔 끼운다.
-- `test_plan.py`: 계획·검증·판정·프롬프트·콘솔 엔진(run_debate)·파일명. `test_app.py`: `streamlit.testing.v1.AppTest`로 실제 UI 종단(3단계 완주·저장, 5단계 완주, 조기 종료, 일시정지·개입·계속, 중단·이어서 진행). AppTest는 app.py를 같은 프로세스에서 실행하므로 `import debate as D`가 패치된 모듈을 본다.
+- `test_plan.py`: 계획·검증·판정·프롬프트·콘솔 엔진(run_debate)·파일명. `test_contract.py`: 지적/판정 파싱, 프롬프트 블록, `execute_stage`의 재요청(`call_claude`/`call_codex`를 대역으로 바꿔 실제 재시도 경로를 태움), 라운드 합계, run_debate 계약. `test_app.py`: `streamlit.testing.v1.AppTest`로 실제 UI 종단(3단계 완주·저장, 5단계 완주, 조기 종료, 일시정지·개입·계속, 중단·이어서 진행). AppTest는 app.py를 같은 프로세스에서 실행하므로 `import debate as D`가 패치된 모듈을 본다.
 - 실행 `.venv\Scripts\python.exe -m pytest` (약 3초).
 
 ## 5. 실행 환경
@@ -153,4 +155,4 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 ## 6. 알려진 제한 / 다음 업그레이드
 
 - Codex 글자 단위 스트리밍 불가, 새로고침 시 진행 중 라운드 유실, 긴 토론·첨부의 요약(압축) 없음.
-- 검증이 "상대 모델의 의견"에서 끝난다 — 코드 실행·테스트 같은 증거 없음. 하네스 업그레이드 3단계에서 다룰 예정 ([DECISIONS.md](DECISIONS.md) 2026-09-16 항목).
+- 검증의 '증거'는 아직 지적 번호별 반영/반박 기록뿐이다 — 반영했다고 적은 내용이 실제로 맞는지는 검사하지 않는다. 코드 실행·테스트 같은 외부 증거(3-2)와 도구 없는 독립 평가자(3-3)는 예정 ([DECISIONS.md](DECISIONS.md) 2026-09-16 항목).

@@ -102,6 +102,11 @@ def test_three_stage_round_end_to_end(isolated, fake_stages):
     assert [c["history"] for c in fake.calls] == [0, 1, 2]
     assert "[GPT · Review]" in fake.calls[-1]["prompt"]
     assert "앞선 검토의 지적을 항목별로 판정" in fake.calls[-1]["instruction"]
+    # 지적 번호별 반영 계약: FINAL 프롬프트에 처리할 지적 블록, 항목·라운드에 계약 결과, 화면에 ✅ 캡션
+    assert "=== 처리해야 할 지적 (직전 [GPT · Review]) ===" in fake.calls[-1]["prompt"]
+    assert rnd["stages"][-1]["contract"]["resolved"] == {1: "반영", 2: "반박"}
+    assert rnd["contract"]["ok"] and rnd["contract"]["issues"] == 2
+    assert any("검토 지적 2건 전부 처리됨" in c.value for c in at.caption)
     # 자동 저장: 격리된 chats 폴더에 json + md
     saved = list((isolated / "chats").glob("*.json"))
     assert len(saved) == 1 and saved[0].with_suffix(".md").exists()
@@ -158,6 +163,20 @@ def test_pause_and_interjection(isolated, fake_stages):
     assert [e["kind"] for e in rnd["stages"]] == ["initial", "interjection", "review", "final"]
     review_prompt = next(c for c in fake.calls if c["kind"] == "review")["prompt"]
     assert "[사용자 · 개입]\n비상정지는 하드와이어로" in review_prompt
+
+
+def test_unresolved_issues_show_warning(isolated, fake_stages):
+    """반박/최종이 [반영/반박 N]을 빼먹으면 라운드가 '미처리 지적' 경고를 단다 (default-FAIL)."""
+    fake_stages(review_ok=False, resolve=False)
+    at = boot()
+    configure(at, stage_count=3, first="claude")
+    submit(at, "계약 위반 테스트")
+    drive(at)
+    rnd = last_round(at)
+    assert rnd["status"] == "done"
+    assert rnd["stages"][-1]["contract"]["missing"] == [1, 2]
+    assert rnd["contract"]["missing"] == [("Claude · FINAL", [1, 2])] and not rnd["contract"]["ok"]
+    assert any("미처리 지적" in w.value for w in at.warning)
 
 
 def test_stop_then_resume(isolated, fake_stages):

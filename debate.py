@@ -782,23 +782,125 @@ VERDICT_OK_RE = re.compile(r"\[\s*판정\s*:\s*추가\s*수정\s*불필요\s*\]"
 VERDICT_RULE = (f"\n답변의 **맨 마지막 줄**에 반드시 `{VERDICT_NEED}` 또는 `{VERDICT_OK}` 중 하나만 적으십시오. "
                 "사소한 표현 차이만 남았으면 '추가 수정 불필요'로 판정하십시오.")
 
+
+# ---- 지적 번호별 반영 계약 (default-FAIL) ----
+# 검토/재검사는 지적을 `[지적 N] ...` 줄로 내고, 그에 답하는 반박/최종은 번호마다 `[반영 N]` 또는 `[반박 N]` 줄을 써야 한다.
+# execute_stage()가 빠진 번호를 찾으면 같은 단계를 재요청(최대 MAX_CONTRACT_RETRIES회)하고, 그래도 빠지면 entry["contract"]["missing"]에
+# 남겨 라운드가 "미처리 지적 있음"으로 표시된다 — 모델이 "반영했다"고 말하는 것이 아니라 번호별 기록이 있어야 처리된 것으로 본다.
+ISSUE_RE = re.compile(r"\[\s*지적\s*(\d+)\s*\]")
+NO_ISSUE_RE = re.compile(r"\[\s*지적\s*없음\s*\]")
+RESOLVE_RE = re.compile(r"\[\s*(반영|반박)\s*(\d+)\s*\]")
+REVIEW_KINDS = ("review", "recheck")     # 지적을 내는 단계
+RESPOND_KINDS = ("rebuttal", "final")    # 직전 지적에 답해야 하는 단계
+MAX_CONTRACT_RETRIES = 1
+ISSUE_FORMAT_RULE = (
+    "\n지적은 한 줄에 하나씩, 중요도 순으로 `[지적 1] ...`, `[지적 2] ...` 형식으로 번호를 매겨 쓰십시오(번호는 1부터). "
+    "지적할 것이 없으면 `[지적 없음]` 한 줄을 쓰십시오. 다음 단계가 이 번호로 항목별 반영/반박을 기록하고 프로그램이 검사합니다.")
+
+
+def parse_issues(text: str) -> list[tuple[int, str]]:
+    """검토 답변에서 `[지적 N] ...` 줄을 [(N, 본문)] 목록으로. 같은 번호는 첫 줄만 (굵게·목록 기호가 붙어도 인식)."""
+    out: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for line in (text or "").splitlines():
+        m = ISSUE_RE.search(line)
+        if m:
+            n = int(m.group(1))
+            if n not in seen:
+                seen.add(n)
+                out.append((n, line[m.end():].strip(" :*_-–—\t")))
+    return out
+
+
+def parse_resolutions(text: str) -> dict[int, str]:
+    """응답에서 `[반영 N]` / `[반박 N]` → {N: "반영"|"반박"} (같은 번호가 여러 번이면 마지막)."""
+    return {int(n): kind for kind, n in RESOLVE_RE.findall(text or "")}
+
+
+def open_issues(history: list[dict]) -> tuple[dict | None, list[tuple[int, str]]]:
+    """직전 AI 단계가 검토/재검사면 (그 항목, 지적 목록). 사용자 개입은 건너뛴다. 아니면 (None, [])."""
+    for h in reversed(history):
+        if h.get("who") == "user":
+            continue
+        if h.get("kind") in REVIEW_KINDS:
+            return h, parse_issues(h.get("content", ""))
+        return None, []
+    return None, []
+
+
+def check_contract(issues: list[tuple[int, str]], content: str) -> dict:
+    """지적 번호마다 [반영/반박 N]이 있는지. {"issues": [N...], "resolved": {N: 종류}, "missing": [N...]}"""
+    resolved = parse_resolutions(content)
+    nums = [n for n, _ in issues]
+    return {"issues": nums, "resolved": {n: resolved[n] for n in nums if n in resolved},
+            "missing": [n for n in nums if n not in resolved]}
+
+
+def contract_block(src: dict, issues: list[tuple[int, str]]) -> str:
+    """응답 단계 프롬프트 끝에 붙이는 '처리해야 할 지적' 블록."""
+    nums = ", ".join(str(n) for n, _ in issues)
+    lines = "\n".join(f"[지적 {n}] {body}" for n, body in issues)
+    return (f"\n\n=== 처리해야 할 지적 (직전 [{DISPLAY[src['who']]} · {src['label']}]) ===\n{lines}\n"
+            f"위 지적 각각에 대해 답변 안에 `[반영 N] 무엇을 어떻게 고쳤는지 한 줄` 또는 `[반박 N] 근거` 줄을 반드시 넣으십시오 (N = {nums}). "
+            "하나라도 빠지면 같은 요청을 다시 받게 됩니다.")
+
+
+def retry_note(missing: list[int]) -> str:
+    nums = ", ".join(map(str, missing))
+    return (f"\n\n=== 재요청 ===\n직전 답변에서 지적 {nums}에 대한 [반영 N]/[반박 N] 판정이 빠졌습니다. "
+            f"답변을 다시 쓰되 이번에는 지적 {nums} 각각에 `[반영 N] ...` 또는 `[반박 N] ...` 줄을 반드시 포함하십시오.")
+
+
+def contract_line(c: dict) -> str:
+    """단계 항목의 계약 결과 한 줄 (UI 캡션·콘솔·md 공용)."""
+    res = c.get("resolved", {}) or {}
+    acc = sum(1 for k in res.values() if k == "반영")
+    rej = sum(1 for k in res.values() if k == "반박")
+    src = c.get("source", "직전 검토")
+    r = int(c.get("retries", 0) or 0)
+    if c.get("missing"):
+        return (f"⚠ {src}의 지적 {', '.join(map(str, c['missing']))} 미처리"
+                + (f" (재요청 {r}회 후에도)" if r else "") + f" — 처리됨: 반영 {acc} · 반박 {rej}")
+    return (f"{src}의 지적 {len(c.get('issues', []))}건 전부 처리 — 반영 {acc} · 반박 {rej}"
+            + (f" (재요청 {r}회)" if r else ""))
+
+
+def contract_summary(stages: list[dict]) -> dict:
+    """라운드 전체 합계: {"issues", "accepted", "rejected", "retries", "missing": [(단계명, [N...])], "ok"}. 검사한 단계가 없으면 issues=0."""
+    total = acc = rej = retries = 0
+    missing: list[tuple[str, list[int]]] = []
+    for h in stages:
+        c = h.get("contract")
+        if not c:
+            continue
+        res = c.get("resolved", {}) or {}
+        total += len(c.get("issues", []))
+        acc += sum(1 for k in res.values() if k == "반영")
+        rej += sum(1 for k in res.values() if k == "반박")
+        retries += int(c.get("retries", 0) or 0)
+        if c.get("missing"):
+            missing.append((f"{DISPLAY[h['who']]} · {h['label']}", list(c["missing"])))
+    return {"issues": total, "accepted": acc, "rejected": rej, "retries": retries, "missing": missing, "ok": not missing}
+
 # 단계 지시문. {other}는 상대 AI 이름(직전 단계 작성자 또는 다음 검토자)으로 실행 시점에 채워진다 → 순서를 바꿔도 지시문이 맞는다.
 STAGE_TEMPLATES: dict[str, str] = {
     "initial": (
         "사용자의 질문을 처음 분석하고 해결책/주장/설계안을 제시하십시오. 핵심 근거와 가정을 명확히 적으십시오. "
         "이 답변은 이후 {other}가 검토하므로, 검증 가능한 형태로 구체적으로 쓰십시오."),
     "review": (
-        "사용자 질문과 {other}의 {target}을 검토하십시오. 다음 항목으로 정리하십시오:\n"
-        "1) 틀린 부분  2) 논리적 허점  3) 빠진 부분  4) 개선 가능한 부분  5) 더 좋은 대안.\n"
-        "각 지적에는 왜 그런지 근거를 붙이고, 중요도 순으로 번호를 매기십시오. 문제가 없는 부분은 짧게 인정하십시오. "
-        "답변 전체를 새로 다시 쓰지는 말고 검토에 집중하십시오.{round_note}" + VERDICT_RULE),
+        "사용자 질문과 {other}의 {target}을 검토하십시오. 살펴볼 관점: "
+        "틀린 부분 · 논리적 허점 · 빠진 부분 · 개선 가능한 부분 · 더 좋은 대안.\n"
+        "각 지적에는 왜 그런지 근거를 붙이십시오. 문제가 없는 부분은 짧게 인정하십시오. "
+        "답변 전체를 새로 다시 쓰지는 말고 검토에 집중하십시오.{round_note}" + ISSUE_FORMAT_RULE + VERDICT_RULE),
     "rebuttal": (
-        "{other}의 검토를 항목별로 판정하십시오: 타당한 지적은 인정하고 수정에 반영하고, 틀렸다고 판단되는 지적은 근거를 들어 반박하십시오. "
-        "그 다음 '수정된 답변'을 완성된 형태로 다시 작성하십시오 (판정 요약 → 수정된 답변 순서)."),
+        "{other}의 검토를 항목별로 판정하십시오: 타당한 지적은 `[반영 N] 무엇을 어떻게 고쳤는지 한 줄`, "
+        "틀렸다고 판단되는 지적은 `[반박 N] 근거`로, 검토의 [지적 N] 번호마다 빠짐없이 한 줄씩 쓰십시오. "
+        "그 다음 '수정된 답변'을 완성된 형태로 다시 작성하십시오 (판정 목록 → 수정된 답변 순서)."),
     "recheck": (
         "지금까지의 전체 토론을 보고 {other}의 최신 수정본을 재검사하십시오: "
         "(a) 여전히 남아 있는 오류나 문제점, (b) 이전 검토의 지적이 제대로 반영되었는지, (c) {other}의 반박이 타당한지. "
-        "최종적으로 수정이 더 필요한 부분을 구체적으로 제시하고, 없다면 '추가 수정 불필요'라고 명시하십시오." + VERDICT_RULE),
+        "수정이 더 필요한 부분은 새 번호로 나열하고(이전 검토의 번호를 언급할 때는 '1차 검토의 지적 2'처럼 구분), "
+        "없다면 '추가 수정 불필요'라고 명시하십시오." + ISSUE_FORMAT_RULE + VERDICT_RULE),
     "final": (
         "사용자 질문부터 지금까지의 Claude/GPT 전체 토론을 종합하십시오.{fb_note} 양쪽 의견 중 남아 있는 충돌이 있으면 판단해 결론을 내리십시오. "
         "그리고 사용자에게 보여줄 **하나의 완결된 최종 답변**만 작성하십시오. 토론 과정을 길게 재서술하지 말고, "
@@ -921,8 +1023,8 @@ def plan_stages(rounds: int = 1, mode: str = "general", first: str = "claude",
         if kind == "final":
             # 반박 단계가 없는 짧은 순서(3단계)에서는 검토 지적의 판정·반영을 최종 단계가 직접 맡는다
             fmt["fb_note"] = ("" if any(k2 == "rebuttal" for _, k2 in steps[:i]) else
-                              " 앞선 검토의 지적을 항목별로 판정해 — 타당한 지적은 답변에 반영하고, "
-                              "틀렸다고 판단되는 지적은 근거를 들어 반박하고 — 그 결과를 최종 답변에 녹이십시오.")
+                              " 앞선 검토의 지적을 항목별로 판정해 — 타당한 지적은 `[반영 N] 한 줄`로 답변에 반영하고, "
+                              "틀렸다고 판단되는 지적은 `[반박 N] 근거`로 — 판정 목록을 먼저 적은 뒤 그 결과를 최종 답변에 녹이십시오.")
         text = STAGE_TEMPLATES[kind].format(**fmt) + hints.get(kind, "")
         plan.append({"who": who, "label": label, "kind": kind, "instruction": text})
     return plan
@@ -958,7 +1060,9 @@ def render_transcript(question: str, history: list[dict], attachments: list[dict
 
 
 def build_prompt(question: str, history: list[dict], stage: dict, plan_len: int,
-                 prior: list[dict] | None = None, attachments: list[dict] | None = None) -> str:
+                 prior: list[dict] | None = None, attachments: list[dict] | None = None,
+                 issues: list[tuple[int, str]] | None = None, issue_src: dict | None = None) -> str:
+    """issues/issue_src가 있으면(직전 검토의 [지적 N]) 끝에 '처리해야 할 지적' 블록을 붙인다."""
     who, label = stage["who"], stage["label"]
     n = sum(1 for h in history if h["who"] != "user") + 1
     return (
@@ -968,6 +1072,7 @@ def build_prompt(question: str, history: list[dict], stage: dict, plan_len: int,
         f"=== 이번 단계 ({n}/{plan_len}): {DISPLAY[who]} · {label} ===\n"
         f"당신은 {DISPLAY[who]}입니다. {stage['instruction']}\n"
         f"'[{DISPLAY[who]} · {label}]' 같은 머리말은 붙이지 말고 본문만 쓰십시오."
+        + (contract_block(issue_src, issues) if issues and issue_src else "")
     )
 
 
@@ -977,19 +1082,36 @@ def build_prompt(question: str, history: list[dict], stage: dict, plan_len: int,
 def execute_stage(question: str, attachments: list[dict], history: list[dict], stage: dict,
                   cfg: Config, prior: list[dict] | None = None, mode: str = "general", plan_len: int = 5,
                   on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
-                  cancel: threading.Event | None = None) -> dict:
-    """단계 하나를 실행해 기록 항목을 반환. 실패 시 CLIError."""
+                  cancel: threading.Event | None = None, max_retries: int = MAX_CONTRACT_RETRIES) -> dict:
+    """단계 하나를 실행해 기록 항목을 반환. 실패 시 CLIError.
+    반박/최종 단계는 직전 검토의 [지적 N]마다 [반영/반박 N]이 있어야 하며, 빠지면 max_retries회까지 재요청한다.
+    검사 결과는 entry["contract"] = {"issues", "resolved", "missing", "retries", "source"} (검사할 지적이 없으면 키 없음)."""
     stage_name = f"{DISPLAY[stage['who']]} · {stage['label']}"
-    prompt = build_prompt(question, history, stage, plan_len, prior, attachments)
+    src, issues = open_issues(history) if stage["kind"] in RESPOND_KINDS else (None, [])
+    prompt = build_prompt(question, history, stage, plan_len, prior, attachments, issues, src)
     rules = system_rules(mode)
     t0 = time.time()
     images = image_attachments(attachments)  # 매 호출이 독립 세션이므로 이미지도 매 단계 다시 전달
-    if stage["who"] == "claude":
-        content, meta = call_claude(cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images)
-    else:
-        content, meta = call_codex(cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images)
-    return {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
-            "elapsed": round(time.time() - t0, 1), "meta": meta, "prompt_chars": len(prompt)}
+    contract: dict | None = None
+    retries = 0
+    while True:
+        if stage["who"] == "claude":
+            content, meta = call_claude(cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images)
+        else:
+            content, meta = call_codex(cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images)
+        if not issues:
+            break
+        contract = check_contract(issues, content)
+        if not contract["missing"] or retries >= max_retries:
+            break
+        retries += 1
+        prompt += retry_note(contract["missing"])  # 같은 단계를 다시: 빠진 번호를 명시해 재요청
+    entry = {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
+             "elapsed": round(time.time() - t0, 1), "meta": meta, "prompt_chars": len(prompt)}
+    if contract is not None:
+        contract.update({"retries": retries, "source": f"{DISPLAY[src['who']]} · {src['label']}"})
+        entry["contract"] = contract
+    return entry
 
 
 def reviewer_says_ok(entry: dict) -> bool:
@@ -1048,6 +1170,7 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
                 run["plan"] = [s["label"] for s in plan]
     else:
         run["status"] = "done"
+    run["contract"] = contract_summary(history)
     run["finished"] = datetime.now().isoformat(timespec="seconds")
     return run
 
@@ -1092,6 +1215,8 @@ def _round_lines(run: dict) -> list[str]:
         if h["who"] != "user":
             head += f"  ({h.get('elapsed', 0)}s)"
         lines += [head, h["content"], ""]
+        if h.get("contract"):
+            lines += [f"> 🧾 {contract_line(h['contract'])}", ""]
     if run.get("early_stopped"):
         lines += ["> ⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뜀", ""]
     if run.get("status") == "stopped":
@@ -1178,6 +1303,8 @@ def console_event(e: dict) -> None:
     elif e["type"] == "done":
         bar = "=" * 72
         print(f"{bar}\n[{name}]  ({e['elapsed']}s, 입력 {e['prompt_chars']}자)\n{bar}\n{e['content']}\n", flush=True)
+        if e.get("contract"):
+            print(f"🧾 {contract_line(e['contract'])}\n", flush=True)
     elif e["type"] == "error":
         cli = "claude" if e["who"] == "claude" else "codex"
         print(f"\n❌ 오류 — 단계 {e['index']}/{e['total']} {name} ({cli} CLI)\n{e['error']}\n", flush=True)

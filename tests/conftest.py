@@ -58,36 +58,45 @@ class FakeStages:
     """`execute_stage` 대역. 단계 종류별 고정 답변을 돌려주고 호출 내역(순서·전달된 기록 길이·프롬프트)을 남긴다.
     실제 프롬프트 조립(`build_prompt`)까지는 그대로 태워서 CLI 직전 경로를 검증한다."""
 
-    def __init__(self, review_ok: bool = False):
-        self.review_ok = review_ok   # True면 검토/재검사가 '추가 수정 불필요' 판정
+    def __init__(self, review_ok: bool = False, resolve: bool = True):
+        self.review_ok = review_ok   # True면 검토/재검사가 '[지적 없음]' + '추가 수정 불필요' 판정
+        self.resolve = resolve       # False면 반박/최종이 [반영/반박 N] 줄을 빼먹는다 (계약 위반 시나리오)
         self.calls: list[dict] = []
 
     def __call__(self, question, attachments, history, stage, cfg, prior=None, mode="general", plan_len=5,
-                 on_delta=None, on_tick=None, cancel=None):
-        prompt = D.build_prompt(question, history, stage, plan_len, prior, attachments)
+                 on_delta=None, on_tick=None, cancel=None, max_retries=D.MAX_CONTRACT_RETRIES):
+        src, issues = D.open_issues(history) if stage["kind"] in D.RESPOND_KINDS else (None, [])
+        prompt = D.build_prompt(question, history, stage, plan_len, prior, attachments, issues, src)
         self.calls.append({"kind": stage["kind"], "who": stage["who"], "history": len(history),
                            "instruction": stage["instruction"], "prompt": prompt})
         verdict = D.VERDICT_OK if self.review_ok else D.VERDICT_NEED
+        tags = "[반영 1] 근거를 보강했습니다.\n[반박 2] 이미 처리된 항목입니다.\n" if self.resolve else ""
         content = {
             "initial": "최초 답변입니다.",
-            "review": f"1) 지적 하나.\n{verdict}",
-            "rebuttal": "지적 1 반영. 수정된 답변입니다.",
-            "recheck": f"재검사 결과.\n{verdict}",
-            "final": "최종 답변입니다.",
+            "review": (f"[지적 없음]\n{verdict}" if self.review_ok
+                       else f"[지적 1] 근거가 약합니다.\n[지적 2] 예외 처리가 빠졌습니다.\n{verdict}"),
+            "rebuttal": f"{tags}수정된 답변입니다.",
+            "recheck": (f"[지적 없음]\n{verdict}" if self.review_ok else f"[지적 1] 표현이 아직 모호합니다.\n{verdict}"),
+            "final": f"{tags}최종 답변입니다.",
         }[stage["kind"]]
         if on_delta:
             on_delta(content)
         if on_tick:
             on_tick(0.1)
-        return {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
-                "elapsed": 0.1, "meta": {"model": "fake"}, "prompt_chars": len(prompt)}
+        entry = {"who": stage["who"], "label": stage["label"], "kind": stage["kind"], "content": content,
+                 "elapsed": 0.1, "meta": {"model": "fake"}, "prompt_chars": len(prompt)}
+        if issues:  # execute_stage와 같은 형태로 계약 결과를 붙인다 (재요청은 흉내 내지 않음)
+            c = D.check_contract(issues, content)
+            c.update({"retries": 0, "source": f"{D.DISPLAY[src['who']]} · {src['label']}"})
+            entry["contract"] = c
+        return entry
 
 
 @pytest.fixture
 def fake_stages(monkeypatch):
-    """`fake = fake_stages(review_ok=...)` 로 execute_stage를 바꿔 끼운다."""
-    def make(review_ok: bool = False) -> FakeStages:
-        fake = FakeStages(review_ok)
+    """`fake = fake_stages(review_ok=..., resolve=...)` 로 execute_stage를 바꿔 끼운다."""
+    def make(review_ok: bool = False, resolve: bool = True) -> FakeStages:
+        fake = FakeStages(review_ok, resolve)
         monkeypatch.setattr(D, "execute_stage", fake)
         return fake
     return make

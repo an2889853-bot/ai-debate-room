@@ -241,11 +241,28 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                         unsafe_allow_html=True)
             with st.container(border=True):
                 st.markdown(e["content"])
+                if e.get("contract"):
+                    st.caption("🧾 " + D.contract_line(e["contract"]))
         else:
             with st.expander(f"**{name}**  ·  {e.get('elapsed', 0)}s", expanded=expanded):
                 if used:
                     st.caption(used)
                 st.markdown(e["content"])
+                if e.get("contract"):
+                    st.caption("🧾 " + D.contract_line(e["contract"]))
+
+
+def render_contract_summary(stages: list[dict]) -> None:
+    """라운드 전체의 지적 처리 결과. 미처리가 있으면 경고 — FINAL을 그대로 믿지 말라는 뜻 (default-FAIL)."""
+    s = D.contract_summary(stages)
+    if s["issues"] == 0:
+        return
+    if s["missing"]:
+        st.warning("⚠ 미처리 지적: " + "; ".join(f"{lab} → {', '.join(map(str, ns))}" for lab, ns in s["missing"])
+                   + ". 재요청 후에도 판정이 빠진 항목이라 FINAL을 그대로 믿기 전에 직접 확인하세요.")
+    else:
+        st.caption(f"✅ 검토 지적 {s['issues']}건 전부 처리됨 (반영 {s['accepted']} · 반박 {s['rejected']}"
+                   + (f" · 재요청 {s['retries']}회" if s["retries"] else "") + ")")
 
 
 def render_round(run: dict) -> None:
@@ -253,6 +270,7 @@ def render_round(run: dict) -> None:
                 run.get("mode", "general"), round_stage_count(run))
     for e in run.get("stages", []):
         render_entry(e)
+    render_contract_summary(run.get("stages", []))
     if run.get("early_stopped"):
         st.caption("⏩ 검토 AI가 '추가 수정 불필요'로 판정해 남은 검토 단계를 건너뛰었습니다.")
     if run.get("status") == "stopped":
@@ -585,7 +603,8 @@ def finalize_active(status: str, error: str | None = None) -> None:
                                          "early_stopped", "started", "prior_rounds", "first", "final_who")}
     round_.update({"plan": [st_["label"] for st_ in active["plan"]],
                    "plan_steps": [[st_["who"], st_["kind"]] for st_ in active["plan"]],  # 재개용
-                   "config": D.asdict(active["cfg"]), "status": status, "error": error, "finished": now})
+                   "config": D.asdict(active["cfg"]), "contract": D.contract_summary(active["stages"]),
+                   "status": status, "error": error, "finished": now})
     if ss.conv is None:
         ss.conv = D.new_conversation(active["question"])
     ss.conv["rounds"].append(round_)
