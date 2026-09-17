@@ -56,10 +56,10 @@ claude -p --output-format stream-json|json --tools "" --no-session-persistence -
 **Codex** `call_codex(cfg, prompt, stage, on_tick, cancel, images)`
 ```
 codex exec --skip-git-repo-check --ephemeral --color never -o <임시파일>
-           --sandbox read-only|workspace-write -C <sandbox|workspace> [--search] [--json]
+           --sandbox read-only|workspace-write -C <sandbox|workspace> [-c web_search=live] [--json]
            [-m X] [-c model_reasoning_effort=Y] [-i 이미지경로]... -
 ```
-- 샌드박스·작업 폴더·웹·`--json`은 `codex_tool_args(cfg)`: tools면 `workspace-write`(아니면 `read-only`; `danger-full-access`는 쓰지 않음), `web_search`면 `--search`, 둘 중 하나라도 켜지면 `--json`으로 이벤트를 받아 `parse_codex_events()`가 `item.completed`의 command(명령·출력·exit)/search/file 항목을 `meta.actions`로, `turn.completed.usage`를 `meta.usage = {in, out, total}`로, 마지막 `agent_message`를 `-o` 파일이 비었을 때의 보완 텍스트로 쓴다. item 종류 이름은 버전마다 다를 수 있어 부분 일치(command/search/file·patch)로 본다 — **실기 검증 전**(tools/probe_tools.py).
+- 샌드박스·작업 폴더·웹·`--json`은 `codex_tool_args(cfg)`: tools면 `workspace-write`(아니면 `read-only`; `danger-full-access`는 쓰지 않음), `web_search`면 `-c web_search=live`(`--search`는 대화형 CLI 옵션이라 `exec`가 거부 — 실기 확인), 둘 중 하나라도 켜지면 `--json`으로 이벤트를 받아 `parse_codex_events()`가 `item.completed`의 command(명령·출력·exit)/search/file 항목을 `meta.actions`로, `turn.completed.usage`를 `meta.usage = {in, out, total}`로, 마지막 `agent_message`를 `-o` 파일이 비었을 때의 보완 텍스트로 쓴다. item 종류 이름은 버전마다 다를 수 있어 부분 일치(command/search/file·patch)로 본다 — **실기 검증 전**(tools/probe_tools.py).
 - 시스템 프롬프트 옵션이 없어 규칙을 프롬프트 맨 앞에 붙인다. 마지막 메시지는 `-o` 파일에서 읽는다(stdout엔 헤더·로그가 섞임).
 - 실제 적용된 model/effort는 시작 헤더(stderr)의 `model:` / `reasoning effort:` 줄에서 뽑아 meta에 담는다. 출력에 `tokens used: N` 줄이 있으면 `meta.usage = {"total": N}`(입력/출력 구분 없음), 없으면 `None` — 지금 버전은 안 찍는 것으로 보여 GPT 토큰은 대개 `?`.
 - `exec --json`은 `item.completed`(완성본)만 내보내고 델타가 없어 **글자 단위 스트리밍 불가** → UI는 경과 시간만 표시.

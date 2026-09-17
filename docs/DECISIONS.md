@@ -196,3 +196,8 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 
 사용자 질문 "기본을 꺼둔 이유가 토큰·시간 때문이냐, 켜면 성능이 좋은 거냐"에 대한 정리: 꺼둔 이유는 위험 범위 > 재현성 > 시간·사용량 순이고, 성능은 질문 종류에 따라 갈린다 — 최신 사실·코드 실행이 필요한 질문은 켜는 게 확실히 낫고, PLC 래더·설계 검토·첨부 분석처럼 근거가 이미 안에 있는 질문은 검색이 추론을 밀어내고 두 AI를 같은 검색 결과에 묶어 독립 검토가 약해질 수 있다. 사용자 결정: **🌐·🛠 둘 다 기본 켜짐, 필요하면 사이드바에서 끔.** 구현: `DEFAULT_SETTINGS` True, 콘솔 `--web/--tools` → `--no-web/--no-tools`. 엔진 `Config` 기본은 꺼진 채 둠(라이브러리 호출·테스트가 실수로 도구를 켜지 않게 — 독립 평가 때와 같은 원칙). 테스트: `isolated` 픽스처가 `WORKSPACES`를 임시 폴더로 돌려 UI 테스트가 프로젝트에 workspace를 만들지 않게 함, 기본 켜짐/끔 시나리오 2개 → 97개.
 모드별 기본값(예: PLC 검증은 끔)은 제안만 하고 아직 넣지 않음.
+
+## 2026-09-17 — 7단계 실기 검증 (사용자가 tools/probe_tools.py 실행)
+
+**Claude — 설계대로 동작**: 웹 프로브는 `WebSearch` tool_use가 파서에 잡히고 답에 출처 URL·확인 시각이 붙음(sonnet/low, API 환산 $0.064). 파일·명령 프로브는 `Write hello.py → Bash "python hello.py" → hi 42`가 기록되고 workspace에 git 커밋(`fcfe9f4`)됐으며, 허용 목록 밖 `curl --version`은 **"This command requires approval"로 거부**되고 result의 `permission_denials`에 남았다 — 허용 목록이 실제 경계로 작동. `permissionMode: acceptEdits`, 도구 목록도 init 이벤트에서 확인.
+**Codex — 실패 → 수정**: `codex exec --search`가 `unexpected argument '--search'`. 도움말의 `--search`는 최상위(대화형 CLI) 옵션이었다. `codex features list`에서 `web_search_request`/`web_search_cached`는 deprecated, 새 방식은 설정 키 → `-c web_search=live`로 변경. 키를 모르는 버전이면 `--strict-config`가 아니라서 무시되고 검색만 안 되므로 라운드는 깨지지 않는다. Codex `--json` 이벤트 형식(item 종류 이름)은 아직 실기 미확인 — 프로브에 `--only codex`와 이벤트 종류 통계 출력을 넣어 재실행 요청.

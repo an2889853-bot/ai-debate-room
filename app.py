@@ -494,7 +494,7 @@ with st.sidebar:
                            help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
                                 "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
     web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", True)), disabled=busy,
-                             help="Claude는 WebSearch/WebFetch, Codex는 --search. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
+                             help="Claude는 WebSearch/WebFetch, Codex는 web_search=live. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
                                   "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
     tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
                         help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "

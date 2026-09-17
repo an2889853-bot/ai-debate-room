@@ -128,11 +128,13 @@ def claude_tool_args(cfg: Config) -> list[str]:
 
 
 def codex_tool_args(cfg: Config) -> list[str]:
-    """샌드박스는 tools면 workspace-write, 아니면 read-only (danger-full-access는 쓰지 않음). 웹은 --search.
+    """샌드박스는 tools면 workspace-write, 아니면 read-only (danger-full-access는 쓰지 않음).
+    웹은 설정 키 `-c web_search=live` — `--search`는 대화형 CLI 옵션이라 `codex exec`가 받지 않는다(실기 확인 2026-09-17:
+    "unexpected argument '--search'"). 키를 모르는 버전이면 --strict-config가 아니라서 무시되고 검색만 안 된다(실패하지 않음).
     행동을 기록하려면 이벤트가 필요하므로 도구가 켜져 있을 때만 --json."""
     args = ["--sandbox", "workspace-write" if cfg.tools else "read-only", "-C", str(cwd_for(cfg))]
     if cfg.web_search:
-        args.append("--search")
+        args += ["-c", "web_search=live"]
     if cfg.tools or cfg.web_search:
         args.append("--json")
     return args

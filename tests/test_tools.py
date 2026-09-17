@@ -30,10 +30,11 @@ def test_claude_tool_args():
 def test_codex_tool_args(tmp_path):
     off = D.codex_tool_args(D.Config())
     assert off[:2] == ["--sandbox", "read-only"] and off[off.index("-C") + 1] == str(D.SANDBOX)
-    assert "--search" not in off and "--json" not in off
+    assert "web_search=live" not in off and "--json" not in off and "--search" not in off
     on = D.codex_tool_args(D.Config(tools=True, web_search=True, workspace=str(tmp_path)))
     assert on[:2] == ["--sandbox", "workspace-write"] and on[on.index("-C") + 1] == str(tmp_path)
-    assert "--search" in on and "--json" in on and "danger" not in " ".join(on)
+    assert on[on.index("-c") + 1] == "web_search=live" and "--json" in on and "danger" not in " ".join(on)
+    assert "--search" not in on, "--search는 대화형 CLI 옵션 — codex exec는 거부한다 (실기 확인)"
     assert "--json" in D.codex_tool_args(D.Config(web_search=True))
     assert D.codex_tool_args(D.Config(tools=True))[:2] == ["--sandbox", "workspace-write"]   # workspace 없으면 sandbox\\
 
