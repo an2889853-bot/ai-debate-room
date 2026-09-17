@@ -52,7 +52,8 @@ STAGE_TEMPLATES: dict[str, str] = {
         "당신은 이 토론의 **독립 평가자**입니다. 답을 새로 쓰지 말고 {other}의 최종 답변(FINAL)만 채점하십시오. 기준: "
         "(1) 사용자 질문에 실제로 답했는가, (2) 검토에서 나온 지적이 최종 답변에 반영되었거나 근거 있게 반박되었는가, "
         "(3) 근거 없는 단정·내부 모순·사실 오류, (4) 대화 기록의 '[프로그램 검사 ...]' 결과와 어긋나는 주장. "
-        "문제가 있으면 무엇을 어떻게 고쳐야 하는지 구체적으로 적으십시오." + ISSUE_FORMAT_RULE + EVAL_RULE),
+        "문제가 있으면 무엇을 어떻게 고쳐야 하는지 구체적으로 적으십시오. 검증은 최종 답변의 핵심 주장 5개 이내에 집중하고, "
+        "사소한 표현 차이는 넘기십시오." + ISSUE_FORMAT_RULE + EVAL_RULE),
 }
 KIND_LABEL = {"initial": "Initial", "review": "Review", "rebuttal": "Rebuttal", "recheck": "Recheck", "final": "FINAL",
               "evaluate": "Eval"}
@@ -190,10 +191,10 @@ def plan_preview(plan: list[dict]) -> str:
     return " → ".join(f"{DISPLAY[s['who']]}·{s['label']}" for s in plan)
 
 
-def system_rules(mode: str, tools: bool = False, web: bool = False, web_reuse: bool = False) -> str:
+def system_rules(mode: str, tools: bool = False, web: bool = False, web_reuse: bool = False, budget: int = 0) -> str:
     """공통 규칙(도구 허용 여부 반영) + 모드 규칙. 웹이 켜지면 투자 모드의 '최신 시세는 알 수 없다'도 '검색으로 확인하라'로."""
     rules = MODES.get(mode, MODES["general"])["rules"]
     if web:
         rules = rules.replace("최신 시세·뉴스는 알 수 없으므로 '확인 필요' 항목으로 분리하십시오.",
                               "최신 시세·뉴스는 웹 검색으로 확인하고 출처 URL·확인 시각을 적으십시오.")
-    return COMMON_RULES_HEAD + tool_rules(tools, web, web_reuse) + COMMON_RULES_TAIL + rules
+    return COMMON_RULES_HEAD + tool_rules(tools, web, web_reuse, budget) + COMMON_RULES_TAIL + rules

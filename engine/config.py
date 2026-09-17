@@ -39,6 +39,9 @@ CLAUDE_FILE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
 CLAUDE_WEB_TOOLS = ["WebSearch", "WebFetch"]
 MAX_ACTION_OUTPUT = 1200               # 기록에 남기는 도구 결과 상한(글자)
 WEB_SCOPES = {"initial_eval": "최초 답변 + 평가", "initial": "최초 답변만", "all": "전체 단계"}
+# Codex 샌드박스(workspace-write)는 workspace 밖 실행 파일을 막아 venv 파이썬(uv 트램폴린 → uv 설치 폴더)이 실패했다(실기 2026-09-17).
+# --add-dir 로 venv 와 기반 파이썬 폴더를 열어 주면 동작함을 확인. 쓰기 가능 폴더가 되므로 모델이 venv 를 건드릴 수 있다는 위험은 문서에 명시.
+CODEX_ADD_DIRS = [d for d in dict.fromkeys([sys.prefix, sys.base_prefix]) if d and Path(d).exists()]
 
 
 def web_allowed(scope: str, kind: str) -> bool:
@@ -66,6 +69,8 @@ class Config:
     workspace: str = ""                   # tools일 때 CLI 작업 폴더 (비어 있으면 sandbox\)
     web_scope: str = "initial_eval"       # 웹 검색을 쓰는 단계: all(전체) | initial(최초 답변만) | initial_eval(최초 답변 + 평가)
     readonly: bool = False                # True면 도구는 읽기·실행·검색만 (Edit/Write 금지, Codex read-only) — 평가자 단계가 씀
+    tool_budget: int = 8                  # 단계당 도구 호출 권고 상한 (지시문으로 전달 — CLI에 강제 옵션이 없음)
+    eval_tool_budget: int = 5             # 평가자 단계의 권고 상한 (실측: 평가자가 12회 조회하면 2분·API 환산 $1 이상)
     claude_exe: str = ""
     codex_exe: str = ""
 

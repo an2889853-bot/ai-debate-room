@@ -134,6 +134,9 @@ def codex_tool_args(cfg: Config) -> list[str]:
     "unexpected argument '--search'"). 키를 모르는 버전이면 --strict-config가 아니라서 무시되고 검색만 안 된다(실패하지 않음).
     행동을 기록하려면 이벤트가 필요하므로 도구가 켜져 있을 때만 --json."""
     args = ["--sandbox", "workspace-write" if (cfg.tools and not cfg.readonly) else "read-only", "-C", str(cwd_for(cfg))]
+    if cfg.tools:
+        for d in CODEX_ADD_DIRS:  # 샌드박스 안에서 venv 파이썬을 실행할 수 있도록 (실기 확인)
+            args += ["--add-dir", d]
     if cfg.web_search:
         args += ["-c", "web_search=live"]
     if cfg.tools or cfg.web_search:

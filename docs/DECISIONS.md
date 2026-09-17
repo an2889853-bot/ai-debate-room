@@ -216,3 +216,10 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 **개선**: 실시간 도구 표시(`on_action` 콜백, `CodexLiveParser`가 `item.started`부터 보여줌 — GPT 단계는 글자 스트리밍이 없어 이게 유일한 진행 표시), "📁 작업 폴더" 확장(개수·용량·고아 폴더 정리 버튼), 사이드바를 "🛠 도구"·"🧠 모델 · 실행 설정" expander로 접어 기본 화면을 짧게(토글 12개 → 순서·평가만 노출).
 **설계 선택**: 실시간 표시는 최종 기록과 분리 — 스트리밍 파서는 UI용 임시, 저장되는 `entry["actions"]`는 전체 stdout을 다시 파싱한 결과(중복·순서 문제 방지). 작업 폴더 삭제는 `WORKSPACES` 밖이면 거부하고 읽기 전용 .git 파일은 chmod 후 삭제. expander 정리는 줄 범위를 들여쓰는 스크립트로 수행해 위젯 코드는 그대로.
 **검증**: 109개(사이클 3 테스트 7개 + UI expander·정리 버튼 1개). 첫 실행에서 FakeCLI 대역 시그니처에 `on_action`이 없어 19개가 깨졌고 대역을 맞춰 통과 — 대역은 실제 시그니처를 따라가야 한다는 교훈(`conftest.FakeCLI`).
+
+## 2026-09-17 — 사이클 4: 실기 데이터 2건 반영 (Codex 파이썬 해결, 도구 호출 상한)
+
+**실기 1 — Codex 프로브 `--only codex`(--add-dir 시험)**: `Edit hello2.py → Bash python hello2.py → hi 43`, WebSearch, `Get-Date` 모두 성공, stderr 비어 있음, 토큰 73k. → `CODEX_ADD_DIRS`(venv, uv 기반 파이썬 폴더)를 `codex_tool_args`가 tools일 때 `--add-dir`로 넣도록 정식 적용. 프로브의 임시 패치는 제거.
+**실기 2 — 실제 토론 "최근뉴스 정리해줘"(새 기본: 도구 켬, 검색 범위 최초+평가)**: 6단계 489초(전체 단계 검색이던 전날 2라운드 665초보다 27% 단축). GPT 최초 답변이 WebSearch 5회(223k 토큰), Claude 검토 `[지적 7]`(Bash `ls`/`git` 1회, exit 128 실패 — 쓸모없는 호출), GPT FINAL 7/7 반영, **Claude 평가 NEEDS_WORK**(`[지적 5]`, WebFetch 6회 중 3회 "unable to fetch"(yna·apnews 차단) + WebSearch, 145초, $1.14), GPT FINAL 2 5/5 반영, Claude Eval 2 **PASS**(Bash date + WebFetch/WebSearch 4회, 98초, $0.90). 반영 계약 12/12, 재요청 0, 재작성 루프 정상. 비용은 평가자 두 번이 절반 이상 — 평가자가 사실 확인에 열심인 건 좋으나 상한이 필요.
+**결정**: ① 단계당 도구 호출 권고 상한 `tool_budget`(8)·평가자 `eval_tool_budget`(5)을 규칙 문구로(이 CLI엔 `--max-turns`가 없고 `--max-budget-usd`는 구독에서 의미가 불명확해 안 씀). ② 웹 규칙에 "조회 실패 URL 재시도 금지". ③ 평가자 지시문에 "핵심 주장 5개 이내". ④ UI 도구 확장에 상한 입력.
+**검증**: 112개(add-dir 인자, 상한 문구·평가자 적용 spy, 평가자 지시문, UI 기본값). 실기 효과는 다음 실제 토론에서 평가 단계의 조회 횟수·시간으로 확인.

@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
     "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
+    "tool_budget": 8,
     "compact_chars": 60000, "web_search": True, "tools": True,   # 사용자 지정(2026-09-17): 기본 켜짐, 사이드바에서 끔
     "web_scope": "initial_eval",
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
@@ -516,6 +517,9 @@ with st.sidebar:
         tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
                             help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
                                  "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
+        tool_budget = int(st.number_input("단계당 도구 호출 권고 상한 (평가자는 최대 5)", min_value=1, max_value=30,
+                                          value=int(s.get("tool_budget", 8)), disabled=busy,
+                                          help="지시문으로 주는 권고치입니다 (이 CLI 버전엔 강제 상한 옵션이 없음). 실측: 평가자가 12회 조회하면 2분·API 환산 $1 이상."))
 
     order_mode = st.radio("순서", ["기본", "직접 편집"], index=1 if s["use_custom"] else 0, horizontal=True, disabled=busy,
                           help="기본: 먼저 답하는 AI와 최종 정리 AI만 고르면 나머지 역할이 자동으로 정해짐. 직접 편집: 표에서 단계를 하나씩 구성")
@@ -634,6 +638,7 @@ with st.sidebar:
             claude_effort=None if claude_effort.startswith("(") else claude_effort,
             codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
             compact_chars=compact_chars, web_search=web_search, tools=tools, web_scope=web_scope,
+            tool_budget=tool_budget, eval_tool_budget=min(tool_budget, D.Config.eval_tool_budget),
         )
         rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
         st.caption("현재 설정 → " + (
@@ -647,7 +652,7 @@ with st.sidebar:
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
                     "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
                     "evaluate": evaluate, "eval_revise": eval_revise, "compact_chars": compact_chars,
-                    "web_search": web_search, "tools": tools, "web_scope": web_scope,
+                    "web_search": web_search, "tools": tools, "web_scope": web_scope, "tool_budget": tool_budget,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:

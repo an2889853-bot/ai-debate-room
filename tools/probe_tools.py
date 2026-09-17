@@ -74,14 +74,11 @@ if only in ("all", "claude"):
     print("Claude 파일·명령 실패:", e)
 
 # 3) Codex 파일·명령 + 웹 검색 (--json, -c web_search=live)
-#    2026-09-17 실기: 샌드박스 안에서 venv 파이썬(uv 트램폴린)이 "did not find executable at <uv 경로>"로 실패.
-#    --add-dir 로 venv 와 uv 설치 폴더를 열어 주면 되는지 확인한다 (기본 엔진 경로엔 아직 안 넣음).
+#    2026-09-17 실기: 샌드박스 안에서 venv 파이썬(uv 트램폴린)이 "did not find executable at <uv 경로>"로 실패 →
+#    --add-dir 로 venv 와 uv 설치 폴더를 열어 해결(같은 날 재확인: hi 43). 이제 엔진(codex_tool_args)이 CODEX_ADD_DIRS를 넣는다.
 cfg = D.Config(**base, tools=True, web_search=True)
 if only in ("all", "codex"):
-  _orig_args = C.codex_tool_args
-  _extra = [str(Path(sys.executable).parents[1]), str(Path(sys.base_prefix))]
-  C.codex_tool_args = lambda c: _orig_args(c) + [x for d in _extra for x in ("--add-dir", d)]
-  print("codex --add-dir 시험:", _extra)
+  print("codex --add-dir:", D.CODEX_ADD_DIRS)
   try:
     t, m = D.call_codex(cfg, D.system_rules("general", tools=True, web=True) + "\n현재 폴더에 hello2.py 파일을 만들어 print('hi 43')를 넣고 "
                         "python hello2.py 를 실행해 출력을 보고하십시오. 그 다음 웹 검색으로 Python 최신 안정 버전을 출처 URL과 함께 한 줄로 적으십시오.",

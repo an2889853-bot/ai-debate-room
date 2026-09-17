@@ -48,7 +48,8 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     # 이 단계의 도구 범위: 웹은 web_scope에 따라(최초 답변의 검색 결과는 기록으로 남아 뒤 단계가 재사용), 평가자는 읽기 전용
     web_on = bool(cfg.web_search) and web_allowed(cfg.web_scope, stage["kind"])
     stage_cfg = dataclasses.replace(cfg, web_search=web_on, readonly=bool(cfg.readonly) or stage["kind"] == "evaluate")
-    rules = system_rules(mode, cfg.tools, web_on, web_reuse=bool(cfg.web_search) and not web_on)
+    budget = int(cfg.eval_tool_budget if stage["kind"] == "evaluate" else cfg.tool_budget)
+    rules = system_rules(mode, cfg.tools, web_on, web_reuse=bool(cfg.web_search) and not web_on, budget=budget)
     t0 = time.time()
     images = image_attachments(attachments)  # 매 호출이 독립 세션이므로 이미지도 매 단계 다시 전달
     contract: dict | None = None

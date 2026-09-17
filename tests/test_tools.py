@@ -36,6 +36,40 @@ def test_readonly_tools_for_evaluator():
     assert D.codex_tool_args(D.Config(tools=True, readonly=True))[:2] == ["--sandbox", "read-only"]
 
 
+def test_codex_add_dirs_open_venv_python_for_tools():
+    """실기(2026-09-17): 샌드박스가 venv 파이썬(uv 트램폴린)을 막아 --add-dir로 venv·기반 파이썬 폴더를 연다."""
+    on = D.codex_tool_args(D.Config(tools=True))
+    dirs = [on[i + 1] for i, x in enumerate(on) if x == "--add-dir"]
+    assert dirs == D.CODEX_ADD_DIRS and dirs, "venv/기반 파이썬 폴더가 --add-dir로 열려야 함"
+    assert "--add-dir" not in D.codex_tool_args(D.Config(web_search=True))          # 파일·명령이 꺼지면 열지 않음
+    assert "--add-dir" in D.codex_tool_args(D.Config(tools=True, readonly=True))    # 평가자도 파이썬 실행은 필요
+
+
+def test_tool_budget_rules_and_evaluator_focus():
+    assert "8회 이내" in D.tool_rules(tools=True, budget=8) and "회 이내" not in D.tool_rules(tools=True)
+    assert "회 이내" not in D.tool_rules(web_reuse=True, budget=8)                  # 도구가 없는 단계엔 상한 문구 없음
+    assert "다시 시도하지 말고" in D.tool_rules(web=True)
+    assert "5회 이내" in D.system_rules("general", tools=True, budget=5)
+    ev = D.plan_stages(1, "general", "claude", None, None, 3, evaluate=True)[-1]
+    assert "핵심 주장 5개 이내" in ev["instruction"]
+
+
+def test_execute_stage_uses_smaller_budget_for_evaluator(cli, monkeypatch):
+    seen = {}
+    f = cli(["답"])
+    orig = f.claude
+
+    def spy(cfg, system_prompt, prompt, stage, *a, **kw):
+        seen[stage.split(" · ")[1]] = system_prompt
+        return orig(cfg, system_prompt, prompt, stage, *a, **kw)
+    patch_all(monkeypatch, "call_claude", spy)
+    cfg = D.Config(tools=True, web_search=True, tool_budget=8, eval_tool_budget=5)
+    plan = [dict(s, who="claude") for s in D.plan_stages(1, "general", "claude", "claude", None, 3, evaluate=True)]
+    for s in plan:
+        D.execute_stage("q", [], [], s, cfg, plan_len=len(plan))
+    assert "8회 이내" in seen["Initial"] and "5회 이내" in seen["Eval"] and "8회 이내" in seen["Review"]
+
+
 def test_web_allowed_scopes():
     for kind in ("initial", "review", "rebuttal", "recheck", "final", "evaluate"):
         assert D.web_allowed("all", kind)
