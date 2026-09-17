@@ -35,6 +35,7 @@ DEFAULT_SETTINGS = {
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
     "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
+    "compact_chars": 60000,
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -278,6 +279,9 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
                 render_evidence_ui(e)
+                if e.get("compacted"):
+                    st.caption(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 "
+                               + ("(Claude 요약)" if e["compacted"].get("method") == "claude" else "(요약 호출 실패 → 앞부분만 잘라 붙임)"))
         else:
             with st.expander(f"**{name}**  ·  {e.get('elapsed', 0)}s", expanded=expanded):
                 if used:
@@ -286,6 +290,9 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
                 render_evidence_ui(e)
+                if e.get("compacted"):
+                    st.caption(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 "
+                               + ("(Claude 요약)" if e["compacted"].get("method") == "claude" else "(요약 호출 실패 → 앞부분만 잘라 붙임)"))
 
 
 def render_contract_summary(stages: list[dict]) -> None:
@@ -349,6 +356,7 @@ def resume_round(idx: int) -> None:
         "question": run["question"], "attachments": run.get("attachments", []), "cfg": cfg,
         "mode": run.get("mode", "general"), "rounds": run.get("rounds", 1),
         "stage_count": run.get("stage_count", len(plan)), "early_stop": True, "eval_revise": True,
+        "compaction": dict(run.get("compaction") or {}),
         "plan": plan, "stages": list(run.get("stages", [])), "prior": prior, "prior_rounds": len(prior),
         "status": "running", "early_stopped": bool(run.get("early_stopped")), "started": run.get("started"),
         "first": run.get("first", "claude"), "final_who": run.get("final_who"),
@@ -575,6 +583,10 @@ with st.sidebar:
     # ---- 공통 ----
     st.subheader("🔧 공통")
     timeout = int(st.number_input("CLI 타임아웃 (초, 호출 1회당)", min_value=60, max_value=3600, value=int(s["timeout"]), step=60))
+    compact_k = int(st.number_input("긴 토론 요약 기준 (천 자, 0=끄기)", min_value=0, max_value=500,
+                                    value=int(s.get("compact_chars", 60000)) // 1000, step=10, disabled=busy,
+                                    help="전체 대화 기록이 이 길이를 넘으면 마지막 2단계만 원문으로 두고 그 앞은 Claude가 요약해 전달 (라운드당 1~2회 추가 호출)"))
+    compact_chars = compact_k * 1000
     autosave = st.checkbox("대화 자동 저장 (chats\\ 폴더)", value=bool(s["autosave"]),
                            help="끄면 파일을 만들지 않음. 대신 새로고침/재시작하면 대화가 사라지고, 목록에도 남지 않음")
     do_beep = st.checkbox("토론 완료 시 소리", value=bool(s["beep"]))
@@ -583,6 +595,7 @@ with st.sidebar:
         claude_model=None if claude_model.startswith("(") else claude_model,
         claude_effort=None if claude_effort.startswith("(") else claude_effort,
         codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
+        compact_chars=compact_chars,
     )
     rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
     st.caption("현재 설정 → " + (
@@ -595,7 +608,7 @@ with st.sidebar:
                     "codex_model": codex_model or s["codex_model"], "codex_effort": codex_effort or "(기본)",
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
                     "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
-                    "evaluate": evaluate, "eval_revise": eval_revise,
+                    "evaluate": evaluate, "eval_revise": eval_revise, "compact_chars": compact_chars,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:
@@ -644,6 +657,7 @@ def start_stage_worker(active: dict, stage: dict) -> dict:
             "cancel": threading.Event(), "stage": stage, "t0": time.time()}
     history = list(active["stages"])  # 스냅샷
     plan_len = len(active["plan"])
+    compaction = active.setdefault("compaction", {})  # 요약 캐시 (라운드 단위)
 
     def work() -> None:
         try:
@@ -652,7 +666,7 @@ def start_stage_worker(active: dict, stage: dict) -> dict:
                 active["prior"], active["mode"], plan_len,
                 on_delta=lambda t: live.__setitem__("text", t),
                 on_tick=lambda sec: live.__setitem__("elapsed", sec),
-                cancel=live["cancel"])
+                cancel=live["cancel"], compaction=compaction)
         except D.CLIError as e:
             live["error"], live["cancelled"] = str(e), e.cancelled
         except Exception as e:  # noqa: BLE001
@@ -669,7 +683,7 @@ def finalize_active(status: str, error: str | None = None) -> None:
         live["cancel"].set()
     now = datetime.now().isoformat(timespec="seconds")
     round_ = {k: active.get(k) for k in ("question", "attachments", "mode", "rounds", "stage_count", "stages",
-                                         "early_stopped", "started", "prior_rounds", "first", "final_who")}
+                                         "early_stopped", "started", "prior_rounds", "first", "final_who", "compaction")}
     round_.update({"plan": [st_["label"] for st_ in active["plan"]],
                    "plan_steps": [[st_["who"], st_["kind"]] for st_ in active["plan"]],  # 재개용
                    "config": D.asdict(active["cfg"]), "contract": D.contract_summary(active["stages"]),

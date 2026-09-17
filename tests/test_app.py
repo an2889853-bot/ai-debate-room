@@ -88,6 +88,8 @@ def test_sidebar_defaults_render(isolated):
     caps = [c.value for c in at.sidebar.caption if c.value.startswith("순서:")]
     eval_on = checkbox(at, "🧑‍⚖️ FINAL 뒤").value          # 기본 켜짐 → 순서 끝에 Eval 한 단계가 더 붙는다
     assert eval_on and len(caps) == 1 and caps[0].count("→") == r.value - 1 + 1 and caps[0].endswith("·Eval")
+    compact = next(n for n in at.sidebar.number_input if n.label.startswith("긴 토론 요약 기준"))
+    assert compact.value == 60, "기본 60천 자"
 
 
 def test_three_stage_round_end_to_end(isolated, fake_stages):

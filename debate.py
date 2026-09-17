@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import dataclasses
 import json
 import os
 import queue
@@ -58,6 +59,7 @@ class Config:
     codex_effort: str | None = "xhigh"    # 모델이 지원하지 않으면 지원 범위 안에서 가장 가까운 아래 단계로 낮춘다
     timeout: int = 900                    # CLI 호출 1회당 최대 대기 시간(초)
     run_code: bool = False                # True면 답변의 python 코드 블록을 sandbox\_run에서 실제로 실행해 증거로 붙인다 (문법 검사는 항상)
+    compact_chars: int = 60_000           # 대화 기록이 이 글자 수를 넘으면 오래된 단계를 요약해 전달 (0 = 끄기)
     claude_exe: str = ""
     codex_exe: str = ""
 
@@ -1067,6 +1069,79 @@ def stats_lines(st: dict) -> list[str]:
     return lines
 
 
+# ---- 컨텍스트 압축 (긴 토론 요약) ----
+# 전체 대화 기록이 cfg.compact_chars를 넘으면 마지막 COMPACT_KEEP_LAST개 항목만 원문으로 두고 그 앞은 Claude에게 요약시켜
+# '[요약 · 이전 단계 n개]' 블록으로 대신 넣는다. 요약은 라운드 안에서 캐시(compaction dict, 요약 대상 내용의 해시로 키)돼
+# 단계마다 다시 만들지 않는다. 요약 호출이 실패하면 각 항목 앞부분을 잘라 붙이는 기계적 요약으로 대체해 토론이 멈추지 않게 한다.
+COMPACT_KEEP_LAST = 2
+COMPACT_FALLBACK_CHARS = 800      # 기계적 요약: 항목당 앞부분 글자 수
+SUMMARY_RULES = (
+    "당신은 AI 토론 기록의 요약자입니다. 도구를 쓰지 말고 텍스트로만 답하십시오. 아래 단계들을 다음 단계 참가자가 맥락을 잃지 않을 만큼 "
+    "요약하십시오: 각 단계마다 '[Claude · Review]' 같은 머리말을 유지하고, 핵심 주장·수정 내용과 [지적 N]/[반영 N]/[반박 N]/[판정: ...]/"
+    "[평가: ...] 줄, '[프로그램 검사 ...]' 결과는 번호와 결론을 그대로 남기십시오. 전체 3,000자 이내. 새로운 의견을 덧붙이지 마십시오.")
+
+
+def compaction_needed(question: str, history: list[dict], attachments: list[dict] | None, limit: int) -> int:
+    """요약할 앞쪽 항목 수 (0이면 불필요). limit<=0이면 끔. 마지막 COMPACT_KEEP_LAST개는 항상 원문."""
+    if limit <= 0 or len(history) <= COMPACT_KEEP_LAST:
+        return 0
+    if len(render_transcript(question, history, attachments)) <= limit:
+        return 0
+    return len(history) - COMPACT_KEEP_LAST
+
+
+def fallback_summary(entries: list[dict]) -> str:
+    """요약 호출이 실패했을 때: 각 항목 앞부분만 잘라 붙인다."""
+    parts = []
+    for h in entries:
+        body = (h.get("content") or "").strip()
+        if len(body) > COMPACT_FALLBACK_CHARS:
+            body = body[:COMPACT_FALLBACK_CHARS].rstrip() + " …(잘림)"
+        parts.append(f"[{DISPLAY[h['who']]} · {h['label']}]\n{body}")
+    return "\n\n".join(parts)
+
+
+def summarize_entries(entries: list[dict], cfg: Config) -> tuple[str, str]:
+    """(요약문, 방식 'claude'|'fallback'). Claude 호출이 실패하면 기계적 요약."""
+    text = "\n\n".join(f"[{DISPLAY[h['who']]} · {h['label']}]\n{(h.get('content') or '').strip()}"
+                        + ("\n" + render_evidence(h) if h.get("evidence") else "") for h in entries)
+    try:
+        # 요약엔 깊은 추론이 필요 없다 → effort를 낮춰 빠르고 싸게 (모델은 설정 그대로)
+        summary, _ = call_claude(dataclasses.replace(cfg, claude_effort="low"), SUMMARY_RULES,
+                                 "=== 요약할 단계들 ===\n" + text, "요약")
+        if summary.strip():
+            return summary.strip(), "claude"
+    except (CLIError, FileNotFoundError, OSError):
+        pass
+    return fallback_summary(entries), "fallback"
+
+
+def compact_history(question: str, history: list[dict], attachments: list[dict] | None, cfg: Config,
+                    cache: dict | None) -> dict | None:
+    """필요하면 요약을 만들거나 캐시에서 꺼낸다. cache=None이면 압축 안 함(테스트·구 호출 호환).
+    반환 {"count", "key", "text", "method", "labels"} 또는 None."""
+    if cache is None:
+        return None
+    n = compaction_needed(question, history, attachments, int(getattr(cfg, "compact_chars", 0) or 0))
+    if n <= 0:
+        return None
+    key = f"{n}:{hash(tuple((h.get('who'), h.get('label'), h.get('content', '')) for h in history[:n]))}"
+    if cache.get("key") == key and cache.get("text"):
+        return cache
+    entries = history[:n]
+    text, method = summarize_entries(entries, cfg)
+    cache.clear()
+    cache.update({"count": n, "key": key, "text": text, "method": method,
+                  "labels": f"{DISPLAY[entries[0]['who']]}·{entries[0]['label']} ~ {DISPLAY[entries[-1]['who']]}·{entries[-1]['label']}"})
+    return cache
+
+
+def render_compaction(c: dict) -> str:
+    how = "Claude가 요약" if c.get("method") == "claude" else "앞부분만 잘라 붙임(요약 호출 실패)"
+    return (f"[요약 · 이전 단계 {c['count']}개 ({c.get('labels', '')}) — 프로그램이 길이를 줄이려고 {how}. 원문은 아래 최근 단계만]\n"
+            f"{(c.get('text') or '').strip()}")
+
+
 # ---- 코드 블록 검사 (외부 증거) ----
 # 답변 속 ```python 블록은 항상 문법 검사, json/toml은 파싱 검사. cfg.run_code가 켜져 있으면 python 블록을 sandbox\_run에서
 # 실제로 실행해 exit 코드·출력을 잡는다. 결과는 entry["evidence"]에 남고 다음 단계 프롬프트에 '[프로그램 검사 ...]' 블록으로 들어간다
@@ -1332,8 +1407,13 @@ def render_prior(prior: list[dict]) -> str:
             + "\n\n".join(parts) + "\n\n")
 
 
-def render_transcript(question: str, history: list[dict], attachments: list[dict] | None = None) -> str:
+def render_transcript(question: str, history: list[dict], attachments: list[dict] | None = None,
+                      compaction: dict | None = None) -> str:
+    """compaction이 있으면 앞 count개 항목 대신 요약 블록을 넣는다."""
     parts = [f"[사용자]\n{question.strip()}{render_attachments(attachments or [])}"]
+    if compaction and compaction.get("count"):
+        parts.append(render_compaction(compaction))
+        history = history[compaction["count"]:]
     for h in history:
         parts.append(f"[{DISPLAY[h['who']]} · {h['label']}]\n{h['content'].strip()}")
         if h.get("evidence"):
@@ -1343,14 +1423,16 @@ def render_transcript(question: str, history: list[dict], attachments: list[dict
 
 def build_prompt(question: str, history: list[dict], stage: dict, plan_len: int,
                  prior: list[dict] | None = None, attachments: list[dict] | None = None,
-                 issues: list[tuple[int, str]] | None = None, issue_src: dict | None = None) -> str:
-    """issues/issue_src가 있으면(직전 검토의 [지적 N]) 끝에 '처리해야 할 지적' 블록을 붙인다."""
+                 issues: list[tuple[int, str]] | None = None, issue_src: dict | None = None,
+                 compaction: dict | None = None) -> str:
+    """issues/issue_src가 있으면(직전 검토의 [지적 N]) 끝에 '처리해야 할 지적' 블록을 붙인다.
+    compaction이 있으면 대화 기록의 앞부분이 요약 블록으로 대체된다."""
     who, label = stage["who"], stage["label"]
     n = sum(1 for h in history if h["who"] != "user") + 1
     return (
         render_prior(prior or []) +
         f"=== 지금까지의 전체 대화 기록 ({len(history)}개 발언) ===\n"
-        f"{render_transcript(question, history, attachments)}\n\n"
+        f"{render_transcript(question, history, attachments, compaction)}\n\n"
         f"=== 이번 단계 ({n}/{plan_len}): {DISPLAY[who]} · {label} ===\n"
         f"당신은 {DISPLAY[who]}입니다. {stage['instruction']}\n"
         f"'[{DISPLAY[who]} · {label}]' 같은 머리말은 붙이지 말고 본문만 쓰십시오."
@@ -1364,13 +1446,15 @@ def build_prompt(question: str, history: list[dict], stage: dict, plan_len: int,
 def execute_stage(question: str, attachments: list[dict], history: list[dict], stage: dict,
                   cfg: Config, prior: list[dict] | None = None, mode: str = "general", plan_len: int = 5,
                   on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
-                  cancel: threading.Event | None = None, max_retries: int = MAX_CONTRACT_RETRIES) -> dict:
+                  cancel: threading.Event | None = None, max_retries: int = MAX_CONTRACT_RETRIES,
+                  compaction: dict | None = None) -> dict:
     """단계 하나를 실행해 기록 항목을 반환. 실패 시 CLIError.
     반박/최종 단계는 직전 검토의 [지적 N]마다 [반영/반박 N]이 있어야 하며, 빠지면 max_retries회까지 재요청한다.
     검사 결과는 entry["contract"] = {"issues", "resolved", "missing", "retries", "source"} (검사할 지적이 없으면 키 없음)."""
     stage_name = f"{DISPLAY[stage['who']]} · {stage['label']}"
     src, issues = open_issues(history) if stage["kind"] in RESPOND_KINDS else (None, [])
-    prompt = build_prompt(question, history, stage, plan_len, prior, attachments, issues, src)
+    comp = compact_history(question, history, attachments, cfg, compaction)  # 기록이 길면 앞부분을 요약(라운드 캐시)
+    prompt = build_prompt(question, history, stage, plan_len, prior, attachments, issues, src, comp)
     rules = system_rules(mode)
     t0 = time.time()
     images = image_attachments(attachments)  # 매 호출이 독립 세션이므로 이미지도 매 단계 다시 전달
@@ -1396,6 +1480,8 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     evidence = check_code_blocks(content, run=cfg.run_code)  # 코드 블록이 있으면 검사해 다음 단계의 증거로
     if evidence:
         entry["evidence"] = evidence
+    if comp:
+        entry["compacted"] = {"count": comp["count"], "method": comp["method"]}
     return entry
 
 
@@ -1427,6 +1513,7 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
     if max_stage is not None:
         plan = plan[:max(1, max_stage)]
     history: list[dict] = []
+    compaction: dict = {}
     run = {"question": question, "attachments": attachments or [], "config": asdict(cfg),
            "mode": mode, "rounds": rounds, "stage_count": stage_count,
            "plan": [s["label"] for s in plan], "stages": history,
@@ -1437,7 +1524,8 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
         stage = plan[i]
         emit({"type": "start", "index": i + 1, "total": len(plan), "who": stage["who"], "label": stage["label"]})
         try:
-            entry = execute_stage(question, attachments or [], history, stage, cfg, prior, mode, len(plan))
+            entry = execute_stage(question, attachments or [], history, stage, cfg, prior, mode, len(plan),
+                                  compaction=compaction)
         except (CLIError, FileNotFoundError, OSError) as e:
             run["error"], run["status"] = str(e), "error"
             emit({"type": "error", "index": i + 1, "total": len(plan), "who": stage["who"],
@@ -1457,6 +1545,7 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
     run["contract"] = contract_summary(history)
     run["evaluation"] = eval_summary(history)
     run["usage"] = usage_summary(history)
+    run["compaction"] = compaction or None
     run["finished"] = datetime.now().isoformat(timespec="seconds")
     return run
 
@@ -1507,6 +1596,8 @@ def _round_lines(run: dict) -> list[str]:
             lines += [f"> 🔬 {evidence_summary(h['evidence'])}"] + [f"> {ln}" for ln in render_evidence(h).splitlines()[1:]] + [""]
         if h.get("kind") == "evaluate":
             lines += [f"> 🧑‍⚖️ 독립 평가: {eval_verdict(h) or '(판정 형식 없음)'}", ""]
+        if h.get("compacted"):
+            lines += [f"> 🗜 이전 단계 {h['compacted']['count']}개를 요약해 전달 ({h['compacted']['method']})", ""]
     if usage_summary_line(run.get("stages", [])):
         lines += [f"> {usage_summary_line(run.get('stages', []))}", ""]
     if run.get("early_stopped"):
@@ -1605,6 +1696,8 @@ def console_event(e: dict) -> None:
             print(f"🔬 {evidence_summary(e['evidence'])}\n{render_evidence(e)}\n", flush=True)
         if e.get("kind") == "evaluate":
             print(f"🧑‍⚖️ 독립 평가: {eval_verdict(e) or '(판정 형식 없음)'}\n", flush=True)
+        if e.get("compacted"):
+            print(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 ({e['compacted']['method']})\n", flush=True)
     elif e["type"] == "error":
         cli = "claude" if e["who"] == "claude" else "codex"
         print(f"\n❌ 오류 — 단계 {e['index']}/{e['total']} {name} ({cli} CLI)\n{e['error']}\n", flush=True)
@@ -1655,6 +1748,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--codex-effort", default=Config.codex_effort, help="low/medium/high/xhigh/max/ultra (기본 xhigh, 모델 지원 범위로 자동 조정)")
     ap.add_argument("--timeout", type=int, default=Config.timeout, help="CLI 호출 1회 타임아웃(초)")
     ap.add_argument("--run-code", action="store_true", help="답변의 python 코드 블록을 sandbox\\_run에서 실제로 실행해 증거로 붙임 (문법 검사는 항상)")
+    ap.add_argument("--compact-chars", type=int, default=Config.compact_chars,
+                    help="대화 기록이 이 글자 수를 넘으면 오래된 단계를 요약해 전달 (기본 60000, 0=끄기)")
     ap.add_argument("--check", action="store_true", help="두 CLI가 응답하는지만 확인")
     ap.add_argument("--list-codex-models", action="store_true", help="선택 가능한 Codex 모델과 effort 출력")
     ap.add_argument("--stats", action="store_true", help="chats\\ 저장 대화 전체 통계 (단계 시간, 토큰, 반영 계약, 평가)")
@@ -1669,7 +1764,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = Config(claude_model=a.claude_model or None, claude_effort=a.claude_effort or None,
                  codex_model=a.codex_model or None, codex_effort=a.codex_effort or None, timeout=a.timeout,
-                 run_code=a.run_code)
+                 run_code=a.run_code, compact_chars=a.compact_chars)
     try:
         cfg.claude_exe = find_claude()
         cfg.codex_exe = find_codex()

@@ -64,7 +64,7 @@ class FakeStages:
         self.calls: list[dict] = []
 
     def __call__(self, question, attachments, history, stage, cfg, prior=None, mode="general", plan_len=5,
-                 on_delta=None, on_tick=None, cancel=None, max_retries=D.MAX_CONTRACT_RETRIES):
+                 on_delta=None, on_tick=None, cancel=None, max_retries=D.MAX_CONTRACT_RETRIES, compaction=None):
         src, issues = D.open_issues(history) if stage["kind"] in D.RESPOND_KINDS else (None, [])
         prompt = D.build_prompt(question, history, stage, plan_len, prior, attachments, issues, src)
         self.calls.append({"kind": stage["kind"], "who": stage["who"], "history": len(history),
