@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import debate as D
+from conftest import patch_all
 
 LONG = "가" * 5000
 
@@ -45,7 +46,7 @@ def test_compact_history_caches_by_content(cli):
     assert D.compact_history("q", HIST, None, D.Config(compact_chars=0), {}) is None
 
 
-def test_summary_uses_low_effort(cli):
+def test_summary_uses_low_effort(cli, monkeypatch):
     seen = {}
     f = cli(["요약"])
     orig = f.claude
@@ -53,7 +54,7 @@ def test_summary_uses_low_effort(cli):
     def spy(cfg, *a, **k):
         seen["effort"] = cfg.claude_effort
         return orig(cfg, *a, **k)
-    D.call_claude = spy
+    patch_all(monkeypatch, "call_claude", spy)
     D.summarize_entries(HIST[:2], D.Config(claude_effort="xhigh"))
     assert seen["effort"] == "low"
 
@@ -61,7 +62,7 @@ def test_summary_uses_low_effort(cli):
 def test_summarize_falls_back_when_claude_fails(monkeypatch):
     def boom(*a, **k):
         raise D.CLIError("claude", "요약", "실패")
-    monkeypatch.setattr(D, "call_claude", boom)
+    patch_all(monkeypatch, "call_claude", boom)
     text, method = D.summarize_entries(HIST[:2], D.Config())
     assert method == "fallback" and "…(잘림)" in text
 

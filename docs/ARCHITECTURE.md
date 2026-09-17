@@ -16,10 +16,27 @@
   └─ 라운드 dict → 대화(conv) → chats\<시각>_<주제>.json / .md
 ```
 
-두 파일이 전부다. `debate.py`가 엔진(위 흐름 + 첨부 + 저장 + 계정 + 콘솔), `app.py`가 Streamlit UI.
+엔진은 `engine/` 패키지, UI는 `app.py`. `debate.py`는 **얇은 facade + 콘솔 진입점**이다 — `engine.console`을 star-import 해 모든 공개 이름을 다시 내보내므로 `import debate as D`(app.py, tests)와 `python debate.py`가 그대로 동작한다.
 매 단계는 **독립된 stateless CLI 호출**이고 모델은 기억이 없다 — 컨텍스트는 오직 프롬프트에 넣은 transcript뿐이다.
 
-## 2. 엔진 — debate.py
+| 모듈 (의존 순서) | 책임 |
+|---|---|
+| `engine/config.py` | 경로(ROOT/SANDBOX/CHATS/RUNS), `Config`, 모델·effort 상수, `CLIError`, `find_claude/find_codex`, `clean_env`, `DISPLAY/OTHER` |
+| `engine/attachments.py` | 텍스트/PDF/이미지 변환, 텍스트 없는 PDF → 쪽 이미지, `render_attachments` |
+| `engine/cli.py` | `_popen_stream`, `call_claude`, `call_codex`, Codex 카탈로그·`resolve_codex`, 로그인 상태·로그아웃·`LoginFlow`, `TOKENS_USED_RE` |
+| `engine/contract.py` | `COMMON_RULES`, 판정 계약, 지적 번호별 반영 계약, 독립 평가 판정, `adjust_plan_after`, `reviewer_says_ok` |
+| `engine/plan.py` | `STAGE_TEMPLATES`, `KIND_*`, `MODES`, `default_plan/validate_plan/plan_stages/plan_preview`, `system_rules` |
+| `engine/evidence.py` | 코드 블록 추출·검사·실행, `render_evidence`, `evidence_summary` |
+| `engine/usage.py` | 토큰·비용 해석, 라운드 합계, `stats` |
+| `engine/prompt.py` | `render_prior`, `render_transcript`(요약·증거 블록), `build_prompt`, `render_compaction` |
+| `engine/compact.py` | 압축 필요 판정, `summarize_entries`, `compact_history`(라운드 캐시) |
+| `engine/runner.py` | `execute_stage`, `interjection_entry`, `run_debate` |
+| `engine/store.py` | 대화 저장/목록/불러오기/삭제, 제목·파일명, 마크다운, `final_of` |
+| `engine/console.py` | `console_event`, `check_clis`, `main`(argparse) |
+
+각 모듈은 앞선 모듈들을 `from .x import *`로 가져온다(순환 없음). 그래서 같은 함수 이름이 여러 모듈에 바인딩돼 있고, 테스트의 `conftest.patch_all()`은 facade와 `engine.*` 모두에서 그 이름을 바꾼다 — 호출부가 어느 모듈의 바인딩을 쓰든 가짜가 보이도록. 새 함수를 추가할 때는 의존 순서를 지켜 뒤쪽 모듈에서 앞쪽만 참조한다(앞쪽이 뒤쪽을 쓰면 `render_compaction`을 prompt로 옮긴 것처럼 옮긴다).
+
+## 2. 엔진 — engine/ 패키지 (facade `debate.py`)
 
 ### 2.1 CLI 호출
 
@@ -150,7 +167,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 
 ## 4. 테스트 — tests\
 
-- 원칙: **실제 claude/codex를 호출하지 않는다.** `conftest.isolated` 픽스처가 `D.CHATS/IMAGE_DIR/RUNS`를 임시 폴더로, `find_claude/find_codex/claude_auth_status/codex_auth_status/list_codex_models/winsound.MessageBeep`를 가짜로 바꾸고 `ui_settings.json`을 전후로 보존한다. `fake_stages(review_ok)`는 `D.execute_stage`를 `FakeStages`(단계별 고정 답변, `build_prompt`까지는 실제 경로, 호출 내역 기록)로 바꿔 끼운다.
+- 원칙: **실제 claude/codex를 호출하지 않는다.** `conftest.isolated` 픽스처가 `CHATS/IMAGE_DIR/RUNS`를 임시 폴더로, `find_claude/find_codex/claude_auth_status/codex_auth_status/list_codex_models/winsound.MessageBeep`를 가짜로 바꾸고 `ui_settings.json`을 전후로 보존한다. 대역 교체는 항상 `conftest.patch_all(monkeypatch, 이름, 값)` — facade와 모든 `engine.*` 모듈의 같은 이름을 함께 바꾼다(`monkeypatch.setattr(D, ...)`만 쓰면 engine 내부 호출엔 안 먹는다). `fake_stages(review_ok)`는 `D.execute_stage`를 `FakeStages`(단계별 고정 답변, `build_prompt`까지는 실제 경로, 호출 내역 기록)로 바꿔 끼운다.
 - `test_plan.py`: 계획·검증·판정·프롬프트·콘솔 엔진(run_debate)·파일명. `test_contract.py`: 지적/판정 파싱, 프롬프트 블록, `execute_stage`의 재요청(`call_claude`/`call_codex`를 대역으로 바꿔 실제 재시도 경로를 태움), 라운드 합계, run_debate 계약. `test_eval.py`: 평가 계획·검증 규칙·판정 파싱·`adjust_plan_after`(건너뛰기·재작성 1회)·`final_of`·run_debate 종단(NEEDS_WORK → FINAL 2 계약 검사 → PASS). `test_compact.py`: 압축 필요 판정, 내용 해시 캐시, 요약 effort low, 실패 시 기계적 요약, 프롬프트 반영, run_debate 종단(5단계에서 요약 2회). `test_usage.py`: 토큰·비용 해석(Claude/GPT/모름), 캡션 문자열, Codex `tokens used` 정규식, 라운드 합계, 전체 통계·빈 통계. `test_evidence.py`: 펜스 추출, 문법/파싱 검사, 실제 파이썬 실행(성공·exit 코드·타임아웃·stdin 차단), 다음 단계 프롬프트 전달, run_code 옵션. `test_app.py`: `streamlit.testing.v1.AppTest`로 실제 UI 종단(3단계 완주·저장, 5단계 완주, 조기 종료, 일시정지·개입·계속, 중단·이어서 진행). AppTest는 app.py를 같은 프로세스에서 실행하므로 `import debate as D`가 패치된 모듈을 본다.
 - 실행 `.venv\Scripts\python.exe -m pytest` (약 3초).
 
@@ -158,7 +175,7 @@ codex exec --skip-git-repo-check --sandbox read-only --ephemeral --color never -
 
 - `launch_ui.cmd`(바탕화면 바로가기 대상): 8501 포트가 LISTENING이면 브라우저만, 아니면 최소화 창으로 서버. `start_ui.cmd`: 항상 새 서버. **둘 다 ASCII만** (cmd.exe가 CP949로 읽음).
 - `.streamlit\config.toml`: `toolbarMode="minimal"`(Deploy 버튼 숨김), `gatherUsageStats=false`. `~\.streamlit\credentials.toml`에 `[general] email=""`가 없으면 첫 실행이 "Email:" 입력에서 멈춘다.
-- `debate.py`를 고치면 서버 **재시작** 필요 — 이미 import된 모듈은 옛것이라 `module 'debate' has no attribute ...`가 난다.
+- `debate.py`나 `engine/`을 고치면 서버 **재시작** 필요 — 이미 import된 모듈은 옛것이라 `module 'debate' has no attribute ...`가 난다.
 - 1인용 구조: 서버 PC의 구독 로그인으로 CLI를 실행한다. LAN에 열면 접속자 모두가 내 사용량을 쓰고 계정 패널까지 보인다 ([SETUP.md](SETUP.md) 참고).
 
 ## 6. 알려진 제한 / 다음 업그레이드

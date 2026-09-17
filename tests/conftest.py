@@ -21,6 +21,15 @@ import debate as D  # noqa: E402
 SETTINGS_PATH = ROOT / "ui_settings.json"
 
 
+def patch_all(monkeypatch, name: str, value) -> None:
+    """facade(debate)와 engine.* 모듈 중 같은 이름을 가진 곳을 전부 바꾼다.
+    구현이 engine/ 패키지로 나뉘어 같은 함수의 바인딩이 여러 모듈에 있으므로, 호출부가 어디서 찾든 가짜가 보이게."""
+    monkeypatch.setattr(D, name, value)
+    for mod_name, mod in list(sys.modules.items()):
+        if mod_name.startswith("engine.") and mod is not None and hasattr(mod, name):
+            monkeypatch.setattr(mod, name, value)
+
+
 @pytest.fixture
 def keep_settings():
     """사이드바를 조작하면 ui_settings.json이 저장되므로 테스트 전후로 원본을 보존한다."""
@@ -35,17 +44,17 @@ def keep_settings():
 @pytest.fixture
 def isolated(tmp_path, monkeypatch, keep_settings):
     """chats\\·runs\\ 를 임시 폴더로 돌리고, CLI 탐색·로그인 상태·모델 목록·알림음을 가짜로 바꾼다."""
-    monkeypatch.setattr(D, "CHATS", tmp_path / "chats")
-    monkeypatch.setattr(D, "IMAGE_DIR", tmp_path / "chats" / "_img")
-    monkeypatch.setattr(D, "RUNS", tmp_path / "runs")
+    patch_all(monkeypatch, "CHATS", tmp_path / "chats")
+    patch_all(monkeypatch, "IMAGE_DIR", tmp_path / "chats" / "_img")
+    patch_all(monkeypatch, "RUNS", tmp_path / "runs")
     # 존재하지 않는 실행 파일명 → 혹시 가짜를 우회해 실제 호출로 가더라도 즉시 실패해 사용량을 쓰지 않는다
-    monkeypatch.setattr(D, "find_claude", lambda: "claude-fake.exe")
-    monkeypatch.setattr(D, "find_codex", lambda: "codex-fake.exe")
-    monkeypatch.setattr(D, "claude_auth_status",
-                        lambda exe: {"loggedIn": True, "email": "test@example.com", "subscriptionType": "test",
-                                     "authMethod": "fake", "detail": ""})
-    monkeypatch.setattr(D, "codex_auth_status", lambda exe: {"loggedIn": True, "detail": "Logged in (fake)"})
-    monkeypatch.setattr(D, "list_codex_models", lambda exe, timeout=60: [dict(m) for m in D.CODEX_MODELS_FALLBACK])
+    patch_all(monkeypatch, "find_claude", lambda: "claude-fake.exe")
+    patch_all(monkeypatch, "find_codex", lambda: "codex-fake.exe")
+    patch_all(monkeypatch, "claude_auth_status",
+              lambda exe: {"loggedIn": True, "email": "test@example.com", "subscriptionType": "test",
+                           "authMethod": "fake", "detail": ""})
+    patch_all(monkeypatch, "codex_auth_status", lambda exe: {"loggedIn": True, "detail": "Logged in (fake)"})
+    patch_all(monkeypatch, "list_codex_models", lambda exe, timeout=60: [dict(m) for m in D.CODEX_MODELS_FALLBACK])
     try:
         import winsound
         monkeypatch.setattr(winsound, "MessageBeep", lambda *a, **k: None)
@@ -128,8 +137,8 @@ def cli(monkeypatch):
     """`f = cli([응답1, 응답2, ...])` 로 두 CLI 호출을 대역으로 바꾼다 (execute_stage의 실제 경로를 태울 때)."""
     def make(responses: list[str]) -> FakeCLI:
         f = FakeCLI(responses)
-        monkeypatch.setattr(D, "call_claude", f.claude)
-        monkeypatch.setattr(D, "call_codex", f.codex)
+        patch_all(monkeypatch, "call_claude", f.claude)
+        patch_all(monkeypatch, "call_codex", f.codex)
         return f
     return make
 
@@ -139,6 +148,6 @@ def fake_stages(monkeypatch):
     """`fake = fake_stages(review_ok=..., resolve=...)` 로 execute_stage를 바꿔 끼운다."""
     def make(review_ok: bool = False, resolve: bool = True) -> FakeStages:
         fake = FakeStages(review_ok, resolve)
-        monkeypatch.setattr(D, "execute_stage", fake)
+        patch_all(monkeypatch, "execute_stage", fake)
         return fake
     return make

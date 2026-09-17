@@ -4,7 +4,7 @@
 
 이 앱은 **서버 PC에 로그인된 Claude Code CLI·Codex CLI를 직접 실행하는 1인용 구조**다. 다른 PC에서 쓰려면 그 PC에 똑같이 설치하는 것이 정석이다.
 
-**가져갈 것**: 이 폴더를 통째로 복사하되 `.venv\`, `__pycache__\`, `chats\`(개인 기록, 원하면), `runs\`는 빼도 된다 (약 0.5MB). git을 쓰면 `git clone`이 곧 이 목록이다. `sandbox\` 빈 폴더는 필요하다(CLI 호출 작업 폴더 — git에는 `.gitkeep`으로 들어 있음). `ui_settings.json`을 가져가면 사이드바 설정이 그대로 따라간다.
+**가져갈 것**: 이 폴더를 통째로 복사하되 `.venv\`, `__pycache__\`, `chats\`(개인 기록, 원하면), `runs\`는 빼도 된다 (약 0.6MB). `engine\` 폴더(엔진 패키지)가 빠지면 `debate.py`가 import 오류를 낸다. git을 쓰면 `git clone`이 곧 이 목록이다. `sandbox\` 빈 폴더는 필요하다(CLI 호출 작업 폴더 — git에는 `.gitkeep`으로 들어 있음). `ui_settings.json`을 가져가면 사이드바 설정이 그대로 따라간다.
 
 **새 PC에서 (PowerShell)**:
 ```powershell

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import debate as D
+from conftest import patch_all
 
 ANSWER = (
     "설명입니다.\n"
@@ -72,7 +73,7 @@ def test_execute_stage_attaches_evidence_and_next_stage_sees_it(cli):
 
 def test_execute_stage_runs_only_when_config_enabled(cli, monkeypatch):
     calls = []
-    monkeypatch.setattr(D, "_run_python", lambda code, timeout: (calls.append(code) or (True, "exit 0")))
+    patch_all(monkeypatch, "_run_python", lambda code, timeout: (calls.append(code) or (True, "exit 0")))
     cli(["```python\nprint(1)\n```"])
     stage = D.plan_stages(1, "general", "claude", None, None, 3)[0]
     D.execute_stage("q", [], [], stage, D.Config(run_code=False), plan_len=3)

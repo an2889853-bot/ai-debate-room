@@ -174,3 +174,11 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 **표시**: 요약이 들어간 단계 캡션 "🗜 이전 단계 n개를 요약해 전달 (Claude 요약 | 요약 호출 실패 → 앞부분만 잘라 붙임)", 라운드 dict `compaction`에 요약문 저장(모델이 실제로 본 것을 나중에 확인 가능).
 **검증**: `tests/test_compact.py` 9개(필요 판정, 캐시 히트/미스, effort low, 실패 폴백, 프롬프트 치환, execute_stage 표시, run_debate 5단계에서 요약 2회) → 84개.
 **한계**: 요약도 모델 호출이라 라운드당 1~2회 추가 호출·시간. 요약 품질은 검증하지 않는다(다음 단계 모델이 요약을 근거로 틀릴 수 있음). 기준 60,000자는 경험값 — 실제 긴 토론에서 조정 필요.
+
+## 2026-09-17 — 6단계: debate.py → engine/ 패키지 분리
+
+**문제**: `debate.py`가 1,837줄·80여 함수로 CLI 실행·계획·프롬프트·첨부·검증·관측·저장·콘솔이 한 파일에 있었다. 하네스 엔지니어링의 "경계가 뚜렷한 구조" 원칙과 가장 멀었다.
+**결정**: 12개 모듈의 `engine/` 패키지로 나누고 `debate.py`는 facade + 콘솔 진입점으로 남김(`import debate as D`, `python debate.py`, `launch_ui.cmd`, 문서의 명령 전부 그대로). 의존 순서 config → attachments → cli → contract → plan → evidence → usage → prompt → compact → runner → store → console, 각 모듈은 앞선 모듈만 star-import(순환 없음).
+**설계 선택**: (1) 파일 순서대로 자르면 compact가 prompt를 참조해 순환이 생겨 import 순서를 파일 순서와 분리했고, 순환을 끊기 위해 `DISPLAY/OTHER`→config, `TOKENS_USED_RE`→cli, `reviewer_says_ok`→contract, `render_compaction`→prompt로 옮김. (2) 모듈 간 star-import는 이름 바인딩을 여러 모듈에 남기므로 테스트 대역을 한 곳만 바꾸면 안 먹는다 → `conftest.patch_all()`이 facade와 `engine.*` 전부를 바꾸도록 하고 모든 테스트를 그 헬퍼로 통일(분리 전 모놀리스에서도 통과 확인). (3) 밑줄 이름(`_run_python` 등)은 star-import에 안 실리므로 facade에서 명시 export. (4) 분리는 스크립트로(앵커 문자열 기준 슬라이스) 수행해 손으로 옮기다 생기는 누락을 피했고, 첫 시도에서 `render_transcript` NameError가 나 git으로 되돌린 뒤 순서를 고쳐 재실행.
+**검증**: 84개 전부 통과, `debate.py --stats/--help` 정상, AppTest 렌더링 예외 0. 첫 실행에서 테스트가 125초 걸렸으나 재실행 5초(새 파일 생성 직후 일회성 지연).
+**남은 것**: `app.py`(869줄)는 아직 한 파일 — 사이드바/라운드 실행/렌더링으로 나눌 수 있지만 Streamlit 스크립트 특성상 이득이 작아 보류. 하네스 업그레이드 6단계 전부 완료.

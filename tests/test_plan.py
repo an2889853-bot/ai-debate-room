@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import debate as D
+from conftest import patch_all
 
 CLAUDE_FIRST_5 = [("claude", "initial"), ("gpt", "review"), ("claude", "rebuttal"), ("gpt", "recheck"), ("claude", "final")]
 
@@ -120,7 +121,7 @@ def _fake_execute(review_ok: bool):
 
 
 def test_run_debate_three_stages(monkeypatch):
-    monkeypatch.setattr(D, "execute_stage", _fake_execute(review_ok=False))
+    patch_all(monkeypatch, "execute_stage", _fake_execute(review_ok=False))
     events = []
     run = D.run_debate("q", D.Config(), on_event=events.append, first="gpt", stage_count=3)
     assert run["status"] == "done" and run["stage_count"] == 3
@@ -130,7 +131,7 @@ def test_run_debate_three_stages(monkeypatch):
 
 
 def test_run_debate_five_stages_early_stop(monkeypatch):
-    monkeypatch.setattr(D, "execute_stage", _fake_execute(review_ok=True))
+    patch_all(monkeypatch, "execute_stage", _fake_execute(review_ok=True))
     events = []
     run = D.run_debate("q", D.Config(), on_event=events.append, stage_count=5)
     assert run["early_stopped"] and [e["kind"] for e in run["stages"]] == ["initial", "review", "final"]
@@ -139,7 +140,7 @@ def test_run_debate_five_stages_early_stop(monkeypatch):
 
 
 def test_run_debate_five_stages_no_early_stop(monkeypatch):
-    monkeypatch.setattr(D, "execute_stage", _fake_execute(review_ok=True))
+    patch_all(monkeypatch, "execute_stage", _fake_execute(review_ok=True))
     run = D.run_debate("q", D.Config(), early_stop=False, stage_count=5)
     assert [e["kind"] for e in run["stages"]] == ["initial", "review", "rebuttal", "recheck", "final"]
 

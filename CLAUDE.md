@@ -4,7 +4,7 @@ Claude Code가 이 폴더에서 시작할 때 자동으로 읽는 **짧은 지�
 
 ## 무엇인가
 Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반박하며 하나의 답을 만드는 Streamlit 앱.
-구독 로그인된 **Claude Code CLI**와 **OpenAI Codex CLI**를 Python `subprocess`로 호출한다 (API 키 과금 없음). 코드는 `debate.py`(엔진)와 `app.py`(UI) 둘뿐.
+구독 로그인된 **Claude Code CLI**와 **OpenAI Codex CLI**를 Python `subprocess`로 호출한다 (API 키 과금 없음). 코드는 `engine/`(엔진 패키지 12모듈) + `debate.py`(facade·콘솔 진입점) + `app.py`(UI).
 
 ## 문서 지도
 | 알고 싶은 것 | 어디 |
@@ -23,7 +23,8 @@ Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반�
 
 ## 작업 규칙
 - **테스트·확인 목적으로 실제 claude/codex를 호출하지 않는다** (구독 사용량·로그인 보호). 특히 `codex login --device-auth`는 실행만 해도 기존 로그인이 지워진다. `claude auth logout`은 VS Code Claude Code까지 함께 로그아웃된다.
-- `debate.py`를 고치면 8501 서버를 **재시작**한다 (import된 모듈이 옛것으로 남음). 8501 프로세스 종료 → `launch_ui.cmd`.
+- `engine/`이나 `debate.py`를 고치면 8501 서버를 **재시작**한다 (import된 모듈이 옛것으로 남음). 8501 프로세스 종료 → `launch_ui.cmd`.
+- `engine/` 모듈은 의존 순서(config → attachments → cli → contract → plan → evidence → usage → prompt → compact → runner → store → console)대로 앞쪽만 참조한다. 테스트에서 대역은 반드시 `conftest.patch_all()`로 바꾼다(star-import 때문에 같은 이름이 여러 모듈에 있음).
 - `.cmd` 파일은 ASCII만 (cmd.exe가 CP949로 읽음).
 - 코드 수정 → `pytest`(84개, 약 8초) → 커밋. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
 - 라운드 dict의 `stages`는 실행된 단계 목록, 단계 수는 `stage_count` (이름 충돌 주의).
@@ -43,7 +44,8 @@ cd C:\Users\LG\ai-debate-room
 ```
 ai-debate-room\
   CLAUDE.md / AGENTS.md   이 지도 (AGENTS.md는 Codex CLI용 안내)
-  debate.py               토론 엔진 (CLI 호출, 단계 계획·실행, 첨부, 저장, 계정, 콘솔)
+  engine\                 토론 엔진 패키지 — config·attachments·cli·contract·plan·evidence·usage·prompt·compact·runner·store·console
+  debate.py               engine의 facade + 콘솔 진입점 (`import debate as D`, `python debate.py`)
   app.py                  Streamlit 채팅 UI
   launch_ui.cmd           바탕화면 바로가기용 런처 / start_ui.cmd  항상 새 서버
   requirements.txt        실행 의존성 (고정 버전) / requirements-dev.txt  +pytest
@@ -71,6 +73,6 @@ ai-debate-room\
 ## 현재 상태 (2026-09-16)
 - 기능 완성, 서버 정상(포트 8501). 기본 3단계, 사용자 설정은 GPT 먼저 답함.
 - 환경: Claude Code CLI 2.1.267(`~\.local\bin`), Codex 0.146.1(winget), Python 3.14.7(uv), streamlit 1.63.0, pypdf, pytest. 두 CLI 모두 구독 로그인됨.
-- **하네스 엔지니어링 업그레이드 (6단계)**: 1) 저장소 위생 ✅ (git, pytest, requirements) → 2) 문서 분리 ✅ (이 지도 + docs/) → 3) 증거 기반 검증 루프 ✅ (3-1 지적 번호별 반영 계약, 3-2 코드 블록 검사·실행, 3-3 독립 평가자) → 4) 토큰·비용 관측 ✅ → 5) 컨텍스트 압축 ✅ → **6) debate.py 모듈 분리 (다음)**. 배경과 각 단계 내용은 DECISIONS.md 2026-09-16 항목.
+- **하네스 엔지니어링 업그레이드 (6단계)**: 1) 저장소 위생 ✅ (git, pytest, requirements) → 2) 문서 분리 ✅ (이 지도 + docs/) → 3) 증거 기반 검증 루프 ✅ (3-1 지적 번호별 반영 계약, 3-2 코드 블록 검사·실행, 3-3 독립 평가자) → 4) 토큰·비용 관측 ✅ → 5) 컨텍스트 압축 ✅ → 6) engine/ 모듈 분리 ✅ (2026-09-17). **6단계 전부 완료.** 다음 할 일은 실전 검증: 실제 토론을 돌려 계약 재요청·평가 배지·요약이 어떻게 보이는지 확인하고 지시문을 조정. 배경과 각 단계 내용은 DECISIONS.md 2026-09-16 항목.
 - 3단계(반영 계약·코드 검사·독립 평가)는 실제 모델이 `[지적 N]`/`[반영 N]`/`[평가: …]` 형식을 얼마나 지키는지 아직 실전 검증 전 — 다음 실제 토론에서 재요청 횟수·미처리 경고·평가 배지를 확인하고 자주 어긋나면 지시문을 손볼 것.
 - 알려진 제한: Codex 글자 단위 스트리밍 불가·토큰 수 미확인, 브라우저 새로고침 시 진행 중 라운드 유실, 첨부는 요약 없이 150,000자 절단, 평가자·요약자도 모델이라 같은 오해를 공유할 수 있음.
