@@ -208,3 +208,11 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 **결정**: ① 요약자(압축)는 `tools=False, web_search=False`로 호출 — 같은 Config가 넘어가 요약 중에 도구가 열려 있던 결함. ② 평가자는 `readonly=True` — Claude Edit/Write 제외·`acceptEdits` 없음, Codex `read-only`(Anthropic 평가자 패턴). 채점자가 FINAL 뒤에 파일을 고칠 수 있던 결함. ③ Codex 파서: `_tidy_command`(셸 래퍼·`cd <ws> &&` 제거), `_rel`(workspace 상대 경로), `exit_code` 문자열 정규화, `status: failed`, `action.query` 폴백 — 실기 출력을 축약한 테스트 고정. ④ **검색 범위 `web_scope`** 기본 `initial_eval`(최초 답변 + 평가): 최초 답변의 검색 결과는 기록으로 남아 뒤 단계가 재사용(규칙 `web_reuse`), 평가자만 다시 확인. 라운드당 검색 4회→2회. `initial`/`all` 선택 가능(UI 선택 상자, 콘솔 `--web-scope`).
 **미결**: Codex 샌드박스의 파이썬 실행 — 프로브 `--only codex`가 `--add-dir <.venv> <uv 폴더>`로 열리는지 시험하도록 바꿈. 안 되면 "Codex는 파일·git·PowerShell 명령, 파이썬 실행은 Claude" 제한으로 문서화.
 **검증**: 102개(평가자 읽기 전용 인자, 범위 판정, 단계별 cfg 적용 spy, 파서 실기 형식, 요약자 도구 없음, UI 기본 범위).
+
+## 2026-09-17 — 사이클 3: 코드 검토로 찾은 결함 + 실시간 도구 표시 + 작업 폴더 정리 + 사이드바 정리
+
+사용자 지시 "계속 피드백하면서 진행, 오류 수정". 실패한 라운드·서버 오류는 없어 코드 검토로 잠재 결함을 찾아 고침.
+**결함 수정**: ① 사이드바 "CLI 점검"과 콘솔 `--check`가 도구가 켜진 Config로 호출됐음 → 점검은 `tools=False, web_search=False`. ② 압축 요약 입력에 `[프로그램 기록]`(검색 결과·URL·명령 결과)이 빠져 요약을 거치면 근거가 사라졌음 → 포함 + `SUMMARY_RULES` 보존 지시. ③ 대화를 삭제해도 작업 폴더가 남았음 → `delete_conversation`이 연결된 workspace도 삭제. ④ Codex `--json` 모드에서 시작 헤더가 없으면 모델·effort가 None으로 표시될 수 있음 → 요청값으로 보완하고 `resolve_note`에 표시.
+**개선**: 실시간 도구 표시(`on_action` 콜백, `CodexLiveParser`가 `item.started`부터 보여줌 — GPT 단계는 글자 스트리밍이 없어 이게 유일한 진행 표시), "📁 작업 폴더" 확장(개수·용량·고아 폴더 정리 버튼), 사이드바를 "🛠 도구"·"🧠 모델 · 실행 설정" expander로 접어 기본 화면을 짧게(토글 12개 → 순서·평가만 노출).
+**설계 선택**: 실시간 표시는 최종 기록과 분리 — 스트리밍 파서는 UI용 임시, 저장되는 `entry["actions"]`는 전체 stdout을 다시 파싱한 결과(중복·순서 문제 방지). 작업 폴더 삭제는 `WORKSPACES` 밖이면 거부하고 읽기 전용 .git 파일은 chmod 후 삭제. expander 정리는 줄 범위를 들여쓰는 스크립트로 수행해 위젯 코드는 그대로.
+**검증**: 109개(사이클 3 테스트 7개 + UI expander·정리 버튼 1개). 첫 실행에서 FakeCLI 대역 시그니처에 `on_action`이 없어 19개가 깨졌고 대역을 맞춰 통과 — 대역은 실제 시그니처를 따라가야 한다는 교훈(`conftest.FakeCLI`).

@@ -146,9 +146,68 @@ def load_conversation(path: str | Path) -> dict:
 
 
 def delete_conversation(path: str | Path) -> None:
+    """대화 json/md 삭제. 대화가 작업 폴더를 가리키면(도구를 켠 라운드) 그 폴더도 함께 지운다 (workspace\\ 안일 때만)."""
     p = Path(path)
+    try:
+        d = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        d = {}
+    for ws in {d.get("workspace")} | {r.get("workspace") for r in d.get("rounds", []) if isinstance(r, dict)}:
+        if ws:
+            delete_workspace(ws)
     p.unlink(missing_ok=True)
     p.with_suffix(".md").unlink(missing_ok=True)
+
+
+def _rmtree_force(path: Path) -> None:
+    """읽기 전용 파일(.git 객체)이 있어도 지운다."""
+    def _onerror(func, p, _exc):
+        try:
+            os.chmod(p, 0o700)
+            func(p)
+        except OSError:
+            pass
+    shutil.rmtree(path, onerror=_onerror)
+
+
+def delete_workspace(path: str | Path) -> bool:
+    """WORKSPACES 안의 폴더만 지운다 (밖이면 거부). 지웠으면 True."""
+    p = Path(path).resolve()
+    root = Path(WORKSPACES).resolve()
+    if root not in p.parents or not p.is_dir():
+        return False
+    _rmtree_force(p)
+    return True
+
+
+def linked_workspaces() -> set[str]:
+    """저장된 대화(라운드)가 가리키는 작업 폴더들 (정규화된 절대 경로)."""
+    out: set[str] = set()
+    for c in list_conversations():
+        try:
+            d = load_conversation(c["path"])
+        except (OSError, ValueError):
+            continue
+        for ws in [d.get("workspace")] + [r.get("workspace") for r in d.get("rounds", [])]:
+            if ws:
+                out.add(os.path.normcase(os.path.abspath(str(ws))))
+    return out
+
+
+def list_workspaces() -> list[dict]:
+    """workspace\\ 아래 폴더들: {"path", "name", "size"(바이트), "linked"(저장된 대화가 가리키는가)}."""
+    root = Path(WORKSPACES)
+    if not root.exists():
+        return []
+    linked = linked_workspaces()
+    out = []
+    for p in sorted(root.iterdir()):
+        if not p.is_dir():
+            continue
+        size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+        out.append({"path": str(p), "name": p.name, "size": size,
+                    "linked": os.path.normcase(os.path.abspath(str(p))) in linked})
+    return out
 
 
 def final_of(run: dict) -> str | None:

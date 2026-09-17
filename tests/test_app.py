@@ -228,6 +228,20 @@ def test_tools_default_on_creates_workspace(isolated, fake_stages):
     assert any("📁 작업 폴더" in c.value for c in at.caption)
 
 
+def test_sidebar_groups_and_workspace_cleanup(isolated, fake_stages):
+    """도구·모델 설정이 expander 안에 있어도 위젯이 잡히고, 📁 작업 폴더 확장에 고아 폴더 정리 버튼이 뜬다."""
+    fake_stages(review_ok=False)
+    orphan = D.new_workspace("고아")
+    at = boot()
+    labels = [e.label for e in at.sidebar.expander]
+    assert any("🛠 도구" in l for l in labels) and any("🧠 모델" in l for l in labels) and any("📁 작업 폴더" in l for l in labels)
+    assert checkbox(at, "🛠 파일·명령").value and select(at, "Claude 모델").value
+    assert any("연결되지 않은 폴더 1개" in c.value for c in at.sidebar.caption)
+    button(at, "🧹 연결 안 된 작업 폴더 1개 삭제").click().run()
+    assert not at.exception and not orphan.exists()
+    assert any("연결되지 않은 폴더 0개" in c.value for c in at.sidebar.caption)
+
+
 def test_tools_toggle_off_means_no_workspace(isolated, fake_stages):
     fake_stages(review_ok=False)
     at = boot()

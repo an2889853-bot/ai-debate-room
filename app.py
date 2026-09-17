@@ -477,6 +477,15 @@ with st.sidebar:
                 st.caption(line)
         except Exception as e:  # noqa: BLE001
             st.caption(f"통계 계산 실패: {e}")
+    with st.expander("📁 작업 폴더 (도구를 켠 라운드)"):
+        wss = D.list_workspaces()
+        orphans = [w for w in wss if not w["linked"]]
+        st.caption(f"{len(wss)}개 · {sum(w['size'] for w in wss) / 1024:.0f} KB · 저장된 대화와 연결되지 않은 폴더 {len(orphans)}개 "
+                   "(프로브·삭제된 대화·자동 저장 끈 라운드). 대화를 삭제하면 그 작업 폴더도 같이 지워집니다.")
+        if orphans and st.button(f"🧹 연결 안 된 작업 폴더 {len(orphans)}개 삭제", disabled=busy, width="stretch"):
+            for w in orphans:
+                D.delete_workspace(w["path"])
+            st.rerun()
     if ss.conv:
         st.download_button("⬇ 이 대화 .md 내려받기", data=D.conversation_markdown(ss.conv),
                            file_name=f"{ss.conv['id']}.md", mime="text/markdown", width="stretch")
@@ -491,21 +500,22 @@ with st.sidebar:
     mode = st.selectbox("모드", mode_keys, index=mode_keys.index(s["mode"]) if s["mode"] in mode_keys else 0,
                         format_func=lambda k: D.MODES[k]["name"], disabled=busy)
     st.caption(D.MODES[mode]["description"])
-    run_code = st.checkbox("🔬 코드 블록 실제 실행 (python · sandbox\\_run)", value=bool(s.get("run_code", False)), disabled=busy,
-                           help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
-                                "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
-    web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", True)), disabled=busy,
-                             help="Claude는 WebSearch/WebFetch, Codex는 web_search=live. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
-                                  "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
-    scope_keys = list(D.WEB_SCOPES)
-    web_scope = st.selectbox("검색 범위", scope_keys,
-                             index=scope_keys.index(s.get("web_scope")) if s.get("web_scope") in scope_keys else 0,
-                             format_func=lambda k: D.WEB_SCOPES[k], disabled=busy or not web_search,
-                             help="최초 답변이 검색한 결과는 [프로그램 기록]으로 모든 단계에 남습니다. 검토·반박은 그걸 재사용하고 평가자만 다시 확인하면 "
-                                  "검색 횟수와 토큰이 절반 이하로 줍니다. '전체 단계'는 단계마다 검색 (오늘 실측: 4단계 11분, 토큰 100만+).")
-    tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
-                        help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
-                             "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
+    with st.expander("🛠 도구 — 웹 검색 · 파일·명령 · 코드 실행", expanded=False):
+        run_code = st.checkbox("🔬 코드 블록 실제 실행 (python · sandbox\\_run)", value=bool(s.get("run_code", False)), disabled=busy,
+                               help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
+                                    "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
+        web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", True)), disabled=busy,
+                                 help="Claude는 WebSearch/WebFetch, Codex는 web_search=live. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
+                                      "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
+        scope_keys = list(D.WEB_SCOPES)
+        web_scope = st.selectbox("검색 범위", scope_keys,
+                                 index=scope_keys.index(s.get("web_scope")) if s.get("web_scope") in scope_keys else 0,
+                                 format_func=lambda k: D.WEB_SCOPES[k], disabled=busy or not web_search,
+                                 help="최초 답변이 검색한 결과는 [프로그램 기록]으로 모든 단계에 남습니다. 검토·반박은 그걸 재사용하고 평가자만 다시 확인하면 "
+                                      "검색 횟수와 토큰이 절반 이하로 줍니다. '전체 단계'는 단계마다 검색 (오늘 실측: 4단계 11분, 토큰 100만+).")
+        tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
+                            help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
+                                 "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
 
     order_mode = st.radio("순서", ["기본", "직접 편집"], index=1 if s["use_custom"] else 0, horizontal=True, disabled=busy,
                           help="기본: 먼저 답하는 AI와 최종 정리 AI만 고르면 나머지 역할이 자동으로 정해짐. 직접 편집: 표에서 단계를 하나씩 구성")
@@ -570,67 +580,67 @@ with st.sidebar:
 
     st.divider()
     # ---- 모델 ----
-    st.subheader("🧠 모델")
-    st.markdown("**Claude** (claude CLI)")
-    cm_opts = D.CLAUDE_MODELS + ["(settings 기본값)"]
-    claude_model = st.selectbox("Claude 모델", cm_opts, index=cm_opts.index(s["claude_model"]) if s["claude_model"] in cm_opts else 0,
-                                format_func=lambda k: {"fable": "fable (최신 Fable, 자동 추적)", "opus": "opus (최신 Opus)",
-                                                       "sonnet": "sonnet (최신 Sonnet, 가장 빠름)"}.get(k, k),
-                                help="별칭은 항상 그 계열의 최신 모델을 가리킴. 새 버전이 나오면 자동으로 그 모델을 씀. "
-                                     "(settings 기본값)은 ~/.claude/settings.json 의 모델")
-    ce_opts = ["(기본)"] + D.CLAUDE_EFFORTS
-    claude_effort = st.selectbox("Claude reasoning effort", ce_opts,
-                                 index=ce_opts.index(s["claude_effort"]) if s["claude_effort"] in ce_opts else 0)
+    with st.expander("🧠 모델 · 실행 설정", expanded=False):
+        st.markdown("**Claude** (claude CLI)")
+        cm_opts = D.CLAUDE_MODELS + ["(settings 기본값)"]
+        claude_model = st.selectbox("Claude 모델", cm_opts, index=cm_opts.index(s["claude_model"]) if s["claude_model"] in cm_opts else 0,
+                                    format_func=lambda k: {"fable": "fable (최신 Fable, 자동 추적)", "opus": "opus (최신 Opus)",
+                                                           "sonnet": "sonnet (최신 Sonnet, 가장 빠름)"}.get(k, k),
+                                    help="별칭은 항상 그 계열의 최신 모델을 가리킴. 새 버전이 나오면 자동으로 그 모델을 씀. "
+                                         "(settings 기본값)은 ~/.claude/settings.json 의 모델")
+        ce_opts = ["(기본)"] + D.CLAUDE_EFFORTS
+        claude_effort = st.selectbox("Claude reasoning effort", ce_opts,
+                                     index=ce_opts.index(s["claude_effort"]) if s["claude_effort"] in ce_opts else 0)
 
-    st.markdown("**GPT** (codex CLI)")
-    codex_models = load_codex_models()
-    top_slug = codex_models[0]["slug"] if codex_models else "?"
-    AUTO_LABEL = f"(자동: 카탈로그 최상위 → {top_slug})"
-    model_labels = [AUTO_LABEL] + [f"{m['display_name']}  ({m['slug']})" for m in codex_models] + ["(직접 입력)"]
-    slugs = [m["slug"] for m in codex_models]
-    cx_idx = slugs.index(s["codex_model"]) + 1 if s["codex_model"] in slugs else 0
-    codex_sel = st.selectbox("Codex 모델", model_labels, index=cx_idx,
-                             help="자동 = `codex debug models` 카탈로그에서 우선순위가 가장 높은 모델. 새 모델이 카탈로그 맨 위로 오면 자동으로 바뀜")
-    if codex_sel == AUTO_LABEL:
-        codex_model = D.CODEX_AUTO
-        m = codex_models[0] if codex_models else None
-        codex_efforts, codex_default_effort = (m["efforts"], m["default_effort"]) if m else (D.CODEX_EFFORTS_ALL, None)
-    elif codex_sel == "(직접 입력)":
-        codex_model = st.text_input("모델 slug 직접 입력", value="", placeholder="예: gpt-5.6-terra").strip() or None
-        codex_efforts, codex_default_effort = D.CODEX_EFFORTS_ALL, None
-    else:
-        m = codex_models[model_labels.index(codex_sel) - 1]
-        codex_model, codex_efforts, codex_default_effort = m["slug"], m["efforts"], m["default_effort"]
-    xe_opts = [f"(모델 기본: {codex_default_effort or '?'})"] + codex_efforts
-    codex_effort_sel = st.selectbox("Codex reasoning effort", xe_opts,
-                                    index=codex_efforts.index(s["codex_effort"]) + 1 if s["codex_effort"] in codex_efforts else 0,
-                                    help="모델마다 지원 범위가 다름. 높을수록 느리고 사용량을 더 씀. 자동 모델이 바뀌어 미지원이면 지원 범위로 자동 조정")
-    codex_effort = None if codex_effort_sel.startswith("(") else codex_effort_sel
+        st.markdown("**GPT** (codex CLI)")
+        codex_models = load_codex_models()
+        top_slug = codex_models[0]["slug"] if codex_models else "?"
+        AUTO_LABEL = f"(자동: 카탈로그 최상위 → {top_slug})"
+        model_labels = [AUTO_LABEL] + [f"{m['display_name']}  ({m['slug']})" for m in codex_models] + ["(직접 입력)"]
+        slugs = [m["slug"] for m in codex_models]
+        cx_idx = slugs.index(s["codex_model"]) + 1 if s["codex_model"] in slugs else 0
+        codex_sel = st.selectbox("Codex 모델", model_labels, index=cx_idx,
+                                 help="자동 = `codex debug models` 카탈로그에서 우선순위가 가장 높은 모델. 새 모델이 카탈로그 맨 위로 오면 자동으로 바뀜")
+        if codex_sel == AUTO_LABEL:
+            codex_model = D.CODEX_AUTO
+            m = codex_models[0] if codex_models else None
+            codex_efforts, codex_default_effort = (m["efforts"], m["default_effort"]) if m else (D.CODEX_EFFORTS_ALL, None)
+        elif codex_sel == "(직접 입력)":
+            codex_model = st.text_input("모델 slug 직접 입력", value="", placeholder="예: gpt-5.6-terra").strip() or None
+            codex_efforts, codex_default_effort = D.CODEX_EFFORTS_ALL, None
+        else:
+            m = codex_models[model_labels.index(codex_sel) - 1]
+            codex_model, codex_efforts, codex_default_effort = m["slug"], m["efforts"], m["default_effort"]
+        xe_opts = [f"(모델 기본: {codex_default_effort or '?'})"] + codex_efforts
+        codex_effort_sel = st.selectbox("Codex reasoning effort", xe_opts,
+                                        index=codex_efforts.index(s["codex_effort"]) + 1 if s["codex_effort"] in codex_efforts else 0,
+                                        help="모델마다 지원 범위가 다름. 높을수록 느리고 사용량을 더 씀. 자동 모델이 바뀌어 미지원이면 지원 범위로 자동 조정")
+        codex_effort = None if codex_effort_sel.startswith("(") else codex_effort_sel
 
-    st.divider()
-    # ---- 공통 ----
-    st.subheader("🔧 공통")
-    timeout = int(st.number_input("CLI 타임아웃 (초, 호출 1회당)", min_value=60, max_value=3600, value=int(s["timeout"]), step=60))
-    compact_k = int(st.number_input("긴 토론 요약 기준 (천 자, 0=끄기)", min_value=0, max_value=500,
-                                    value=int(s.get("compact_chars", 60000)) // 1000, step=10, disabled=busy,
-                                    help="전체 대화 기록이 이 길이를 넘으면 마지막 2단계만 원문으로 두고 그 앞은 Claude가 요약해 전달 (라운드당 1~2회 추가 호출)"))
-    compact_chars = compact_k * 1000
-    autosave = st.checkbox("대화 자동 저장 (chats\\ 폴더)", value=bool(s["autosave"]),
-                           help="끄면 파일을 만들지 않음. 대신 새로고침/재시작하면 대화가 사라지고, 목록에도 남지 않음")
-    do_beep = st.checkbox("토론 완료 시 소리", value=bool(s["beep"]))
+        st.divider()
+        # ---- 공통 ----
+        st.subheader("🔧 공통")
+        timeout = int(st.number_input("CLI 타임아웃 (초, 호출 1회당)", min_value=60, max_value=3600, value=int(s["timeout"]), step=60))
+        compact_k = int(st.number_input("긴 토론 요약 기준 (천 자, 0=끄기)", min_value=0, max_value=500,
+                                        value=int(s.get("compact_chars", 60000)) // 1000, step=10, disabled=busy,
+                                        help="전체 대화 기록이 이 길이를 넘으면 마지막 2단계만 원문으로 두고 그 앞은 Claude가 요약해 전달 (라운드당 1~2회 추가 호출)"))
+        compact_chars = compact_k * 1000
+        autosave = st.checkbox("대화 자동 저장 (chats\\ 폴더)", value=bool(s["autosave"]),
+                               help="끄면 파일을 만들지 않음. 대신 새로고침/재시작하면 대화가 사라지고, 목록에도 남지 않음")
+        do_beep = st.checkbox("토론 완료 시 소리", value=bool(s["beep"]))
 
-    CFG = D.Config(
-        claude_model=None if claude_model.startswith("(") else claude_model,
-        claude_effort=None if claude_effort.startswith("(") else claude_effort,
-        codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
-        compact_chars=compact_chars, web_search=web_search, tools=tools, web_scope=web_scope,
-    )
-    rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
-    st.caption("현재 설정 → " + (
-        f"claude `-p --model {CFG.claude_model or '(기본)'}" + (f" --effort {CFG.claude_effort}" if CFG.claude_effort else "") + "`  \n"
-        f"codex `exec" + (f" -m {rx_model}" if rx_model else "")
-        + (f" -c model_reasoning_effort={rx_effort}" if rx_effort else "") + "`"
-        + (f"  \n⚠ {rx_note}" if rx_note else "")))
+        CFG = D.Config(
+            claude_model=None if claude_model.startswith("(") else claude_model,
+            claude_effort=None if claude_effort.startswith("(") else claude_effort,
+            codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
+            compact_chars=compact_chars, web_search=web_search, tools=tools, web_scope=web_scope,
+        )
+        rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
+        st.caption("현재 설정 → " + (
+            f"claude `-p --model {CFG.claude_model or '(기본)'}" + (f" --effort {CFG.claude_effort}" if CFG.claude_effort else "") + "`  \n"
+            f"codex `exec" + (f" -m {rx_model}" if rx_model else "")
+            + (f" -c model_reasoning_effort={rx_effort}" if rx_effort else "") + "`"
+            + (f"  \n⚠ {rx_note}" if rx_note else "")))
 
     new_settings = {"claude_model": claude_model, "claude_effort": claude_effort,
                     "codex_model": codex_model or s["codex_model"], "codex_effort": codex_effort or "(기본)",
@@ -647,7 +657,7 @@ with st.sidebar:
     st.divider()
     if st.button("🔍 현재 설정으로 CLI 점검", width="stretch", disabled=busy,
                  help="위에서 고른 모델/effort로 두 CLI를 한 번씩 호출해 실제 적용값을 보여줌"):
-        cfg0 = D.Config(**D.asdict(CFG))
+        cfg0 = D.Config(**{**D.asdict(CFG), "tools": False, "web_search": False})  # 점검은 도구 없이 최소 호출
         try:
             cfg0.claude_exe, cfg0.codex_exe = D.find_claude(), D.find_codex()
         except FileNotFoundError as e:
@@ -683,7 +693,7 @@ def stages_done(active: dict) -> int:
 
 def start_stage_worker(active: dict, stage: dict) -> dict:
     live = {"text": "", "elapsed": 0.0, "done": False, "entry": None, "error": None, "cancelled": False,
-            "cancel": threading.Event(), "stage": stage, "t0": time.time()}
+            "cancel": threading.Event(), "stage": stage, "t0": time.time(), "actions": []}
     history = list(active["stages"])  # 스냅샷
     plan_len = len(active["plan"])
     compaction = active.setdefault("compaction", {})  # 요약 캐시 (라운드 단위)
@@ -695,7 +705,8 @@ def start_stage_worker(active: dict, stage: dict) -> dict:
                 active["prior"], active["mode"], plan_len,
                 on_delta=lambda t: live.__setitem__("text", t),
                 on_tick=lambda sec: live.__setitem__("elapsed", sec),
-                cancel=live["cancel"], compaction=compaction)
+                cancel=live["cancel"], compaction=compaction,
+                on_action=lambda acts: live.__setitem__("actions", [dict(a) for a in acts]))  # 도구 사용 실시간 표시
         except D.CLIError as e:
             live["error"], live["cancelled"] = str(e), e.cancelled
         except Exception as e:  # noqa: BLE001
@@ -752,7 +763,11 @@ def live_view() -> None:
         if who == "claude":
             st.markdown((live["text"] or "_생각 중..._") + " ▌")
         else:
-            st.caption("GPT(codex CLI)는 완성된 답만 내보내므로 글자 단위로는 보이지 않습니다. 끝나면 한 번에 표시됩니다.")
+            st.caption("GPT(codex CLI)는 완성된 답만 내보내므로 글자 단위로는 보이지 않습니다. 도구 사용은 아래에 실시간으로 표시됩니다.")
+        acts = live.get("actions") or []
+        if acts:
+            st.caption("🛠 " + "  ·  ".join(f"{a['tool']}: {a['input'][:60]}" + (" …" if a.get("running") else "") for a in acts[-4:])
+                       + (f"  (총 {len(acts)}회)" if len(acts) > 4 else ""))
 
 
 def run_active_stage() -> None:

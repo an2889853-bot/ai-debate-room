@@ -154,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{m['slug']:16} {m['display_name']:16} 기본 effort={m['default_effort']:8} 지원={', '.join(m['efforts'])}")
         return 0
     if a.check:
-        return 0 if check_clis(cfg) else 1
+        return 0 if check_clis(dataclasses.replace(cfg, tools=False, web_search=False)) else 1  # 점검은 도구 없이 최소 호출
 
     question = (a.q or a.question or "").strip()
     if not question:

@@ -228,6 +228,68 @@ class ClaudeEventParser:
                         a["error"] = bool(b.get("is_error"))
 
 
+
+
+def _codex_item_action(it: dict, workspace: str | None = None) -> dict | None:
+    """item dict 하나를 action으로 (command/search/file). 해당 없으면 None."""
+    k = str(it.get("type") or "")
+    if "command" in k:
+        rc = it.get("exit_code")
+        try:
+            rc = int(rc) if rc is not None and str(rc).strip() not in ("", "None") else None
+        except (TypeError, ValueError):
+            rc = None
+        out = it.get("aggregated_output") or it.get("output") or ""
+        return {"tool": "Bash", "input": _tidy_command(str(it.get("command") or ""), workspace),
+                "output": str(out)[:MAX_ACTION_OUTPUT], "error": (rc is not None and rc != 0) or it.get("status") == "failed",
+                "running": it.get("status") == "in_progress"}
+    if "search" in k:
+        act = it.get("action") if isinstance(it.get("action"), dict) else {}
+        q = it.get("query") or act.get("query") or ""
+        return {"tool": "WebSearch", "input": str(q)[:300], "output": "", "error": False, "running": it.get("status") == "in_progress"}
+    if "file" in k or "patch" in k:
+        changes = it.get("changes") or it.get("files") or []
+        names = [_rel(str(c.get("path") or c), workspace) if isinstance(c, dict) else str(c) for c in changes] \
+            if isinstance(changes, list) else [str(changes)]
+        return {"tool": "Edit", "input": ", ".join(names)[:300], "output": "", "error": False, "running": it.get("status") == "in_progress"}
+    return None
+
+
+class CodexLiveParser:
+    """codex exec --json을 줄 단위로 받아 진행 중인 도구 사용을 실시간으로 알린다 (item.started → running, item.completed → 확정).
+    최종 기록은 parse_codex_events()가 전체 stdout으로 다시 만든다."""
+
+    def __init__(self, workspace: str | None = None, on_action=None) -> None:
+        self.workspace, self.on_action = workspace, on_action
+        self.actions: list[dict] = []
+        self._by_id: dict[str, dict] = {}
+
+    def feed(self, line: str) -> None:
+        line = line.strip()
+        if not line.startswith("{"):
+            return
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        t = str(obj.get("type") or "")
+        it = obj.get("item") if isinstance(obj.get("item"), dict) else None
+        if not it or t not in ("item.started", "item.completed"):
+            return
+        a = _codex_item_action(it, self.workspace)
+        if a is None:
+            return
+        iid = str(it.get("id") or "")
+        if iid and iid in self._by_id:
+            self._by_id[iid].update(a)
+        else:
+            self.actions.append(a)
+            if iid:
+                self._by_id[iid] = a
+        if self.on_action is not None:
+            self.on_action(self.actions)
+
+
 def parse_codex_events(stdout: str, workspace: str | None = None) -> tuple[list[dict], dict | None, str]:
     """codex exec --json JSONL에서 (actions, usage{in,out,total}|None, 마지막 agent_message 텍스트).
     실기 확인(0.146.1): item.started/item.completed 쌍, item.type = command_execution{command, aggregated_output, exit_code, status}
@@ -289,8 +351,9 @@ def _claude_image_message(prompt: str, images: list[dict]) -> str:
 
 def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
                 on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
-                cancel: threading.Event | None = None, images: list[dict] | None = None) -> tuple[str, dict]:
-    """on_delta가 있으면 stream-json으로 글자 단위 델타를 받는다(누적 텍스트를 넘김).
+                cancel: threading.Event | None = None, images: list[dict] | None = None,
+                on_action: Callable[[list[dict]], None] | None = None) -> tuple[str, dict]:
+    """on_delta가 있으면 stream-json으로 글자 단위 델타를 받는다(누적 텍스트를 넘김). on_action은 도구 사용이 생길 때마다 목록을 넘긴다.
     images가 있으면 --input-format stream-json 으로 base64 이미지 블록을 함께 보낸다 (도구 불필요)."""
     images = image_attachments(images)
     stream = on_delta is not None or bool(images) or bool(cfg.tools or cfg.web_search)  # 도구 이벤트를 기록하려면 stream-json
@@ -324,6 +387,8 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
             return
         t = obj.get("type")
         parser.feed(obj)
+        if on_action is not None and parser.actions and t in ("assistant", "user"):
+            on_action(parser.actions)  # 진행 중 도구 사용을 UI에
         if t == "stream_event":
             ev = obj.get("event") or {}
             delta = ev.get("delta") or {}
@@ -370,8 +435,9 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
 
 def call_codex(cfg: Config, prompt: str, stage: str,
                on_tick: TickCB | None = None, cancel: threading.Event | None = None,
-               images: list[dict] | None = None) -> tuple[str, dict]:
+               images: list[dict] | None = None, on_action: Callable[[list[dict]], None] | None = None) -> tuple[str, dict]:
     """Codex exec는 완성된 메시지만 내보내므로(글자 단위 스트리밍 없음) 마지막 메시지를 -o 파일로 받는다.
+    도구가 켜져 있으면(--json) 도구 사용 이벤트는 줄 단위로 스트리밍되므로 on_action으로 실시간 전달한다.
     images는 `-i 경로`로 첨부한다 (codex exec --help의 -i/--image)."""
     fd, out_path = tempfile.mkstemp(prefix="codex_last_", suffix=".txt")
     os.close(fd)
@@ -386,8 +452,9 @@ def call_codex(cfg: Config, prompt: str, stage: str,
         # -c 값은 TOML로 파싱되고 실패하면 문자열 리터럴로 쓰인다. 따옴표 없이 넘겨 Windows quoting 문제를 피한다.
         cmd += ["-c", f"model_reasoning_effort={effort}"]
     cmd.append("-")  # 프롬프트를 stdin에서 읽음
+    live = CodexLiveParser(cfg.workspace or None, on_action) if (on_action is not None and (cfg.tools or cfg.web_search)) else None
     try:
-        rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, None, on_tick, cancel,
+        rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, live.feed if live else None, on_tick, cancel,
                                              cwd=cwd_for(cfg), env=clean_env(cfg.tools))
         text = ""
         if Path(out_path).exists():
@@ -419,7 +486,10 @@ def call_codex(cfg: Config, prompt: str, stage: str,
         if sep and k.strip().lower() in ("model", "reasoning effort", "provider"):
             header.setdefault(k.strip().lower(), v.strip())
     m_tok = TOKENS_USED_RE.search(err + "\n" + out)
-    meta = {"model": header.get("model"), "reasoning_effort": header.get("reasoning effort"),
+    # --json 모드에선 시작 헤더가 없을 수 있어 요청값으로 보완 (실제 적용값이 아니라 요청값임을 resolve_note로 남김)
+    if not header.get("model") and model:
+        note = (note + " · " if note else "") + "모델 표시는 요청값(헤더 없음)"
+    meta = {"model": header.get("model") or model, "reasoning_effort": header.get("reasoning effort") or effort,
             "resolve_note": note, "stdout_tail": out[-400:],
             "usage": {"total": int(m_tok.group(1).replace(",", ""))} if m_tok else None}
     if cfg.tools or cfg.web_search:

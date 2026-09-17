@@ -37,7 +37,7 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
                   cfg: Config, prior: list[dict] | None = None, mode: str = "general", plan_len: int = 5,
                   on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
                   cancel: threading.Event | None = None, max_retries: int = MAX_CONTRACT_RETRIES,
-                  compaction: dict | None = None) -> dict:
+                  compaction: dict | None = None, on_action: Callable[[list[dict]], None] | None = None) -> dict:
     """단계 하나를 실행해 기록 항목을 반환. 실패 시 CLIError.
     반박/최종 단계는 직전 검토의 [지적 N]마다 [반영/반박 N]이 있어야 하며, 빠지면 max_retries회까지 재요청한다.
     검사 결과는 entry["contract"] = {"issues", "resolved", "missing", "retries", "source"} (검사할 지적이 없으면 키 없음)."""
@@ -55,9 +55,9 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     retries = 0
     while True:
         if stage["who"] == "claude":
-            content, meta = call_claude(stage_cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images)
+            content, meta = call_claude(stage_cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images, on_action)
         else:
-            content, meta = call_codex(stage_cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images)
+            content, meta = call_codex(stage_cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images, on_action)
         if not issues:
             break
         contract = check_contract(issues, content)

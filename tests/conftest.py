@@ -74,7 +74,8 @@ class FakeStages:
         self.calls: list[dict] = []
 
     def __call__(self, question, attachments, history, stage, cfg, prior=None, mode="general", plan_len=5,
-                 on_delta=None, on_tick=None, cancel=None, max_retries=D.MAX_CONTRACT_RETRIES, compaction=None):
+                 on_delta=None, on_tick=None, cancel=None, max_retries=D.MAX_CONTRACT_RETRIES, compaction=None,
+                 on_action=None):
         src, issues = D.open_issues(history) if stage["kind"] in D.RESPOND_KINDS else (None, [])
         prompt = D.build_prompt(question, history, stage, plan_len, prior, attachments, issues, src)
         self.calls.append({"kind": stage["kind"], "who": stage["who"], "history": len(history),
@@ -119,10 +120,10 @@ class FakeCLI:
     def __init__(self, responses: list[str]):
         self.responses, self.calls = responses, []
 
-    def claude(self, cfg, system_prompt, prompt, stage, on_delta=None, on_tick=None, cancel=None, images=None):
+    def claude(self, cfg, system_prompt, prompt, stage, on_delta=None, on_tick=None, cancel=None, images=None, on_action=None):
         return self._answer(prompt, on_delta)
 
-    def codex(self, cfg, prompt, stage, on_tick=None, cancel=None, images=None):
+    def codex(self, cfg, prompt, stage, on_tick=None, cancel=None, images=None, on_action=None):
         return self._answer(prompt, None)
 
     def _answer(self, prompt, on_delta):

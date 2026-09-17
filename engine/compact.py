@@ -38,7 +38,8 @@ COMPACT_FALLBACK_CHARS = 800      # 기계적 요약: 항목당 앞부분 글자
 SUMMARY_RULES = (
     "당신은 AI 토론 기록의 요약자입니다. 도구를 쓰지 말고 텍스트로만 답하십시오. 아래 단계들을 다음 단계 참가자가 맥락을 잃지 않을 만큼 "
     "요약하십시오: 각 단계마다 '[Claude · Review]' 같은 머리말을 유지하고, 핵심 주장·수정 내용과 [지적 N]/[반영 N]/[반박 N]/[판정: ...]/"
-    "[평가: ...] 줄, '[프로그램 검사 ...]' 결과는 번호와 결론을 그대로 남기십시오. 전체 3,000자 이내. 새로운 의견을 덧붙이지 마십시오.")
+    "[평가: ...] 줄, '[프로그램 검사 ...]' 결과는 번호와 결론을 그대로 남기고, '[프로그램 기록 ...]'의 명령·결과·검색 결과(출처 URL)도 "
+    "핵심만 남기십시오. 전체 3,000자 이내. 새로운 의견을 덧붙이지 마십시오.")
 
 
 def compaction_needed(question: str, history: list[dict], attachments: list[dict] | None, limit: int) -> int:
@@ -64,7 +65,9 @@ def fallback_summary(entries: list[dict]) -> str:
 def summarize_entries(entries: list[dict], cfg: Config) -> tuple[str, str]:
     """(요약문, 방식 'claude'|'fallback'). Claude 호출이 실패하면 기계적 요약."""
     text = "\n\n".join(f"[{DISPLAY[h['who']]} · {h['label']}]\n{(h.get('content') or '').strip()}"
-                        + ("\n" + render_evidence(h) if h.get("evidence") else "") for h in entries)
+                        + ("\n" + render_evidence(h) if h.get("evidence") else "")
+                        + ("\n" + render_actions(h) if (h.get("actions") or h.get("denials") or (h.get("workspace") or {}).get("changed")) else "")
+                        for h in entries)
     try:
         # 요약엔 깊은 추론이 필요 없다 → effort를 낮춰 빠르고 싸게 (모델은 설정 그대로)
         # 요약자는 도구·웹 없이 (요약만 하면 되고, 도구가 열리면 요약 중에 명령을 돌릴 수 있다)
