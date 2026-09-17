@@ -35,7 +35,7 @@ DEFAULT_SETTINGS = {
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
     "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
-    "compact_chars": 60000, "web_search": False, "tools": False,
+    "compact_chars": 60000, "web_search": True, "tools": True,   # 사용자 지정(2026-09-17): 기본 켜짐, 사이드바에서 끔
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -493,10 +493,10 @@ with st.sidebar:
     run_code = st.checkbox("🔬 코드 블록 실제 실행 (python · sandbox\\_run)", value=bool(s.get("run_code", False)), disabled=busy,
                            help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
                                 "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
-    web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", False)), disabled=busy,
+    web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", True)), disabled=busy,
                              help="Claude는 WebSearch/WebFetch, Codex는 --search. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
                                   "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
-    tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", False)), disabled=busy,
+    tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
                         help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
                              "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
 

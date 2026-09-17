@@ -26,7 +26,7 @@ Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반�
 - `engine/`이나 `debate.py`를 고치면 8501 서버를 **재시작**한다 (import된 모듈이 옛것으로 남음). 8501 프로세스 종료 → `launch_ui.cmd`.
 - `engine/` 모듈은 의존 순서(config → attachments → cli → contract → plan → evidence → usage → prompt → compact → runner → store → console)대로 앞쪽만 참조한다. 테스트에서 대역은 반드시 `conftest.patch_all()`로 바꾼다(star-import 때문에 같은 이름이 여러 모듈에 있음).
 - `.cmd` 파일은 ASCII만 (cmd.exe가 CP949로 읽음).
-- 코드 수정 → `pytest`(96개, 약 7초) → 커밋. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
+- 코드 수정 → `pytest`(97개, 약 7초) → 커밋. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
 - 라운드 dict의 `stages`는 실행된 단계 목록, 단계 수는 `stage_count` (이름 충돌 주의).
 - 사이드바를 만지면 `ui_settings.json`이 저장된다. 이 파일을 직접 고칠 땐 서버를 끄고 한다.
 
@@ -66,7 +66,7 @@ ai-debate-room\
 - 검토 단계는 마지막 줄 `[판정: 수정 필요 | 추가 수정 불필요]` 계약. 조기 종료가 켜져 있으면 '불필요' 시 FINAL로 건너뛴다.
 - **지적 번호별 반영 계약 (default-FAIL)**: 검토/재검사는 `[지적 N] …` 줄로, 반박/최종은 번호마다 `[반영 N]`/`[반박 N]` 줄로. `execute_stage()`가 검사해 빠진 번호가 있으면 같은 단계를 1회 재요청, 그래도 빠지면 라운드에 "⚠ 미처리 지적" 경고. 결과는 `entry["contract"]`, 라운드 `contract` 합계.
 - **코드 블록 검사 (외부 증거)**: 답변의 ```` ```python ```` 블록은 항상 문법 검사(json/toml은 파싱), `run_code`를 켜면 `sandbox\_run`에서 실제 실행(30초, stdin 차단). 결과 `entry["evidence"]`가 다음 단계 프롬프트에 `[프로그램 검사 · …]` 블록으로 들어간다. 실행은 기본 꺼짐 — 모델 코드가 이 PC에서 그대로 돈다.
-- **도구 허용 (기본 꺼짐, 하네스 방식)**: 🌐 `web_search`(Claude WebSearch/WebFetch, Codex `--search`), 🛠 `tools`(대화별 `workspace\` 안에서 파일 읽기/쓰기 + 허용 목록 명령 python·pytest·pip·git·ls…, Claude `--allowedTools`+`acceptEdits`, Codex `workspace-write`). 허용 목록 밖은 자동 거부. 실행한 명령·결과·검색·파일 변경은 `entry["actions"]` → 기록에 `[프로그램 기록 · …]` 블록으로 들어가고 단계마다 git 커밋. **실기 검증 전** — `tools\probe_tools.py`를 사람이 실행해 확인.
+- **도구 허용 (UI·콘솔 기본 켜짐 — 사용자 지정, 엔진 Config 기본은 꺼짐)**: 🌐 `web_search`(Claude WebSearch/WebFetch, Codex `--search`), 🛠 `tools`(대화별 `workspace\` 안에서 파일 읽기/쓰기 + 허용 목록 명령 python·pytest·pip·git·ls…, Claude `--allowedTools`+`acceptEdits`, Codex `workspace-write`). 허용 목록 밖은 자동 거부. 사이드바에서 끔, 콘솔 `--no-web/--no-tools`. 추론·설계 검토처럼 근거가 이미 안에 있는 질문은 끄는 편이 낫다. 실행한 명령·결과·검색·파일 변경은 `entry["actions"]` → 기록에 `[프로그램 기록 · …]` 블록으로 들어가고 단계마다 git 커밋. **실기 검증 전** — `tools\probe_tools.py`를 사람이 실행해 확인.
 - **컨텍스트 압축**: 기록이 `compact_chars`(기본 60,000자)를 넘으면 마지막 2단계만 원문, 그 앞은 Claude(effort low)가 요약한 `[요약 · 이전 단계 n개]` 블록으로. 라운드 캐시(내용 해시 키), 실패 시 앞부분 잘라 붙임. 계약·조기 종료·평가 판정은 항상 원문으로.
 - **관측**: 단계 캡션에 토큰·API 환산 비용(Claude만 정확, GPT는 CLI가 안 찍어 `?`), 라운드 끝에 ⏱ 합계, 저장 dict `usage`. 전체 통계는 `debate.py --stats` 또는 사이드바 📊 (조기 종료율·계약 재요청·평가 PASS율까지).
 - **독립 평가자**: `evaluate`(기본 켬)면 FINAL 뒤에 최종 정리를 안 쓴 쪽 AI가 `[평가: PASS|NEEDS_WORK]` + `[지적 N]`으로 채점. NEEDS_WORK면 `FINAL 2` + `Eval 2`를 1회만 추가(`adjust_plan_after()` — 조기 종료도 여기서, UI·콘솔 공용). FINAL 2는 평가자 지적을 반영 계약으로 검사받는다. `final_of()`는 FINAL 2 우선.

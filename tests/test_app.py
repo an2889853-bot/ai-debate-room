@@ -211,21 +211,33 @@ def test_code_review_mode_shows_evidence(isolated, fake_stages):
     assert any("코드 검사 2개 블록" in c.value for c in at.caption)
 
 
-def test_tools_toggle_creates_workspace(isolated, fake_stages, monkeypatch):
-    """🛠 파일·명령 허용을 켜면 대화별 workspace가 생기고 라운드·대화에 기록된다. 두 토글 모두 기본 꺼짐."""
-    patch_all(monkeypatch, "WORKSPACES", isolated / "ws")
+def test_tools_default_on_creates_workspace(isolated, fake_stages):
+    """두 토글 모두 기본 켜짐(사용자 지정). 🛠이 켜진 라운드는 대화별 workspace가 생기고 라운드·대화에 기록된다."""
     fake_stages(review_ok=False)
     at = boot()
-    assert not checkbox(at, "🛠 파일·명령").value and not checkbox(at, "🌐 웹 검색").value
-    checkbox(at, "🛠 파일·명령").set_value(True)
+    assert checkbox(at, "🛠 파일·명령").value and checkbox(at, "🌐 웹 검색").value
     configure(at, stage_count=3, first="claude")
     submit(at, "도구 테스트")
     drive(at)
     rnd = last_round(at)
-    assert rnd["workspace"] and Path(rnd["workspace"]).parent == isolated / "ws" and rnd["config"]["tools"] is True
+    assert rnd["workspace"] and Path(rnd["workspace"]).parent == isolated / "ws"
+    assert rnd["config"]["tools"] is True and rnd["config"]["web_search"] is True
     assert rnd["config"]["workspace"] == rnd["workspace"]
     assert at.session_state["conv"]["workspace"] == rnd["workspace"]
     assert any("📁 작업 폴더" in c.value for c in at.caption)
+
+
+def test_tools_toggle_off_means_no_workspace(isolated, fake_stages):
+    fake_stages(review_ok=False)
+    at = boot()
+    checkbox(at, "🛠 파일·명령").set_value(False)
+    checkbox(at, "🌐 웹 검색").set_value(False)
+    configure(at, stage_count=3, first="claude")
+    submit(at, "도구 끔")
+    drive(at)
+    rnd = last_round(at)
+    assert rnd["workspace"] is None and rnd["config"]["tools"] is False and rnd["config"]["web_search"] is False
+    assert not any("📁 작업 폴더" in c.value for c in at.caption)
 
 
 def test_unresolved_issues_show_warning(isolated, fake_stages):

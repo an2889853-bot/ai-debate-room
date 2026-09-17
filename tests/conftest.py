@@ -47,6 +47,7 @@ def isolated(tmp_path, monkeypatch, keep_settings):
     patch_all(monkeypatch, "CHATS", tmp_path / "chats")
     patch_all(monkeypatch, "IMAGE_DIR", tmp_path / "chats" / "_img")
     patch_all(monkeypatch, "RUNS", tmp_path / "runs")
+    patch_all(monkeypatch, "WORKSPACES", tmp_path / "ws")   # 도구 토글이 기본 켜짐이라 라운드마다 workspace가 생긴다 → 임시 폴더로
     # 존재하지 않는 실행 파일명 → 혹시 가짜를 우회해 실제 호출로 가더라도 즉시 실패해 사용량을 쓰지 않는다
     patch_all(monkeypatch, "find_claude", lambda: "claude-fake.exe")
     patch_all(monkeypatch, "find_codex", lambda: "codex-fake.exe")

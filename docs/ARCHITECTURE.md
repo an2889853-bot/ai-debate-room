@@ -123,7 +123,7 @@ codex exec --skip-git-repo-check --ephemeral --color never -o <임시파일>
 
 ### 2.6 콘솔 `debate.py`
 
-`python debate.py "질문"` 또는 `-q`. 옵션: `--file`(반복), `--mode`, `--stages 3|5`, `--rounds`(5단계일 때만 의미), `--first claude|gpt`, `--final-who`, `--plan claude:initial,gpt:review,...`, `--no-early-stop`, `--max-stage N`(테스트용), `--claude-model/--claude-effort`, `--codex-model/--codex-effort`, `--timeout`, `--run-code`, `--compact-chars N`, `--web`, `--tools`, `--check`(두 CLI 응답 확인), `--list-codex-models`, `--stats`(저장된 대화 전체 통계), `--no-save`.
+`python debate.py "질문"` 또는 `-q`. 옵션: `--file`(반복), `--mode`, `--stages 3|5`, `--rounds`(5단계일 때만 의미), `--first claude|gpt`, `--final-who`, `--plan claude:initial,gpt:review,...`, `--no-early-stop`, `--max-stage N`(테스트용), `--claude-model/--claude-effort`, `--codex-model/--codex-effort`, `--timeout`, `--run-code`, `--compact-chars N`, `--no-web`, `--no-tools`(도구는 기본 켜짐), `--check`(두 CLI 응답 확인), `--list-codex-models`, `--stats`(저장된 대화 전체 통계), `--no-save`.
 `run_debate(question, cfg, max_stage, on_event, prior, attachments, rounds, mode, early_stop, first, final_who, custom, stage_count)`가 계획을 순차 실행하며 `on_event`로 `start / done / error / skip / revise` 이벤트를 보낸다. `console_event`는 done 항목에 `contract`가 있으면 🧾 한 줄(`contract_line`)을, `evidence`가 있으면 🔬 요약(`evidence_summary`)과 검사 블록을 더 찍고, run dict에 `contract` 합계가 들어간다. `.md` 내보내기도 항목 아래에 `> 🧾 ...` / `> 🔬 ...`를 남긴다.
 
 ### 2.7 계정
@@ -133,11 +133,11 @@ codex exec --skip-git-repo-check --ephemeral --color never -o <임시파일>
 
 ### 2.8 도구 허용과 행동 기록 (하네스 방식: 끄지 않고 범위를 정해 기록한다)
 
-- `Config.web_search`(🌐 웹 검색 허용) / `Config.tools`(🛠 파일·명령 허용) / `Config.workspace`. 둘 다 기본 꺼짐. 콘솔 `--web`, `--tools`.
+- `Config.web_search`(🌐 웹 검색 허용) / `Config.tools`(🛠 파일·명령 허용) / `Config.workspace`. **엔진 `Config` 기본은 꺼짐**(라이브러리·테스트 안전), **UI `DEFAULT_SETTINGS`와 콘솔 기본은 켜짐**(사용자 지정 2026-09-17) — 사이드바에서 끄거나 콘솔 `--no-web`, `--no-tools`.
 - **규칙 문구**가 바뀐다: `system_rules(mode, tools, web)` = `COMMON_RULES_HEAD` + `tool_rules(tools, web)` + `COMMON_RULES_TAIL` + 모드 규칙. 꺼져 있으면 "어떤 도구도 사용하지 말고"; tools면 "작업 폴더 안에서 파일 읽기/쓰기와 허용된 명령 실행 가능, 허용 목록 밖은 거부, 실행 결과는 프로그램이 기록에 남기니 꾸미지 말고 그대로 인용, 주장 전에 실행으로 확인"; web이면 "검색으로 얻은 사실엔 출처 URL·확인 시각". web이면 투자 모드의 "최신 시세·뉴스는 알 수 없으므로"도 "웹 검색으로 확인하라"로 바뀐다. `COMMON_RULES`는 꺼진 기본 규칙(하위 호환).
 - **작업 폴더**: tools를 켠 라운드는 `workspace\<시각>_<질문 앞 20자>\`에서 돈다(`new_workspace()` — mkdir + `git init`). UI는 같은 대화의 다음 라운드가 `conv["workspace"]`를 재사용하고, 콘솔 `run_debate`는 라운드마다 새로 만든다. 단계가 끝날 때마다 `workspace_commit(ws, "Claude · Initial")`이 `git status --porcelain`으로 바뀐 파일을 모아 커밋해 `entry["workspace"] = {changed, commit}`로 남긴다 — 되돌리기·검토는 그 폴더의 git log. `workspace\`는 git 제외(개인 데이터).
 - **행동 기록**: `execute_stage`가 `meta.actions/denials`를 `entry["actions"]`, `entry["denials"]`로 꺼내고, `render_transcript`가 그 항목 뒤에 `[프로그램 기록 · Claude · Initial의 도구 사용 — 사람이 아니라 프로그램이 기록한 실제 명령과 결과]` 블록(`render_actions`: `- Bash: python hello.py → hi 42`, `- WebSearch: …`, `- ⚠ 거부됨 (허용 목록 밖): …`, `- 작업 폴더 변경: a.py (git 커밋 abc1234)`)을 넣는다. 그래서 상대 AI와 평가자는 "실제로 무슨 명령을 돌렸고 뭐가 나왔는지"를 보고 반박·채점하며(`COMMON_RULES_TAIL`: 기록과 다른 주장은 기록을 믿으라), 웹 검색 결과도 URL과 함께 기록에 남는다. UI 캡션 `actions_summary`("도구 3회 — Bash 2 · WebSearch 1 (실패 1) · 거부 1") + 상세 코드 블록, 콘솔 🛠, .md `> 🛠`.
-- **경계와 위험**: 허용 목록(`TOOL_ALLOW_CMDS` = python·pytest·pip·git·ls·dir·cat·type·echo·mkdir) 안이라도 `python`은 임의 코드 실행이다. 폴더 격리·허용 목록·타임아웃·⏹ 중단은 실수 방지지 보안 경계가 아니고, 웹이 열리면 데이터가 밖으로 나갈 수 있다. 그래서 두 토글 모두 기본 꺼짐이고 도움말에 경고가 있다. 독립 평가자는 여전히 도구 없이 채점한다(같은 Config로 호출되므로 평가 단계에도 도구가 열림 — 평가자가 검증 목적으로 명령을 돌릴 수는 있다).
+- **경계와 위험**: 허용 목록(`TOOL_ALLOW_CMDS` = python·pytest·pip·git·ls·dir·cat·type·echo·mkdir) 안이라도 `python`은 임의 코드 실행이다. 폴더 격리·허용 목록·타임아웃·⏹ 중단은 실수 방지지 보안 경계가 아니고, 웹이 열리면 데이터가 밖으로 나갈 수 있다. 사용자 지정으로 두 토글 모두 기본 켜짐이며 도움말에 경고가 있다 — 추론·설계 검토처럼 근거가 이미 안에 있는 질문은 끄는 편이 낫다(ARCHITECTURE 6절, DECISIONS 2026-09-17 참고). 독립 평가자는 여전히 도구 없이 채점한다(같은 Config로 호출되므로 평가 단계에도 도구가 열림 — 평가자가 검증 목적으로 명령을 돌릴 수는 있다).
 
 ### 2.9 관측 — 토큰·비용·시간
 
@@ -159,7 +159,7 @@ codex exec --skip-git-repo-check --ephemeral --color never -o <임시파일>
 
 ### 3.2 사이드바
 
-저장된 대화 선택(chats + 구 runs), "📊 통계 (저장된 대화 전체)" 확장, 새 대화, `.md` 내려받기, 삭제(2단계 확인) · 모드 · **순서**: 라디오 "기본"(대화 단계 수 3/5, 먼저 답하는 AI, 최종 정리 AI, 5단계일 때만 검토↔반박 라운드 수) / "직접 편집"(`st.data_editor` 표 — AI, 역할; `ss.plan_base` + `plan_nonce` 키로 편집 상태 관리, 편집본을 다시 data로 넣으면 이중 적용되므로 base는 고정; "기본 순서로 되돌리기") · 조기 종료 체크 · 단계마다 멈춤 체크 · "🧑‍⚖️ FINAL 뒤 독립 평가"(기본 켬; 직접 편집이면 표에 '평가' 행을 넣어야 함) · "NEEDS_WORK면 FINAL 1회 재작성 후 재평가"(기본 켬) · "🔬 코드 블록 실제 실행"(모드 아래, 기본 끔) · "🌐 웹 검색 허용 (실시간 확인)"(기본 끔) · "🛠 파일·명령 허용 (대화별 workspace)"(기본 끔) · 순서 미리보기 캡션(`plan_preview`) · Claude 모델·effort · Codex 모델(카탈로그 + 직접 입력)·모델별 effort · 타임아웃 · 긴 토론 요약 기준(천 자) · 자동 저장 · 소리 · "현재 설정 →" 캡션 · "🔍 현재 설정으로 CLI 점검"(두 CLI를 실제로 한 번 호출) · "🔐 계정" 패널(상태 `get_auth()`가 `AUTH_TTL=120초`마다 재조회, 로그인/로그아웃).
+저장된 대화 선택(chats + 구 runs), "📊 통계 (저장된 대화 전체)" 확장, 새 대화, `.md` 내려받기, 삭제(2단계 확인) · 모드 · **순서**: 라디오 "기본"(대화 단계 수 3/5, 먼저 답하는 AI, 최종 정리 AI, 5단계일 때만 검토↔반박 라운드 수) / "직접 편집"(`st.data_editor` 표 — AI, 역할; `ss.plan_base` + `plan_nonce` 키로 편집 상태 관리, 편집본을 다시 data로 넣으면 이중 적용되므로 base는 고정; "기본 순서로 되돌리기") · 조기 종료 체크 · 단계마다 멈춤 체크 · "🧑‍⚖️ FINAL 뒤 독립 평가"(기본 켬; 직접 편집이면 표에 '평가' 행을 넣어야 함) · "NEEDS_WORK면 FINAL 1회 재작성 후 재평가"(기본 켬) · "🔬 코드 블록 실제 실행"(모드 아래, 기본 끔) · "🌐 웹 검색 허용 (실시간 확인)"(기본 켬) · "🛠 파일·명령 허용 (대화별 workspace)"(기본 켬) · 순서 미리보기 캡션(`plan_preview`) · Claude 모델·effort · Codex 모델(카탈로그 + 직접 입력)·모델별 effort · 타임아웃 · 긴 토론 요약 기준(천 자) · 자동 저장 · 소리 · "현재 설정 →" 캡션 · "🔍 현재 설정으로 CLI 점검"(두 CLI를 실제로 한 번 호출) · "🔐 계정" 패널(상태 `get_auth()`가 `AUTH_TTL=120초`마다 재조회, 로그인/로그아웃).
 
 ### 3.3 라운드 실행
 
