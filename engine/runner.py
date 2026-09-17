@@ -45,7 +45,7 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     src, issues = open_issues(history) if stage["kind"] in RESPOND_KINDS else (None, [])
     comp = compact_history(question, history, attachments, cfg, compaction)  # 기록이 길면 앞부분을 요약(라운드 캐시)
     prompt = build_prompt(question, history, stage, plan_len, prior, attachments, issues, src, comp)
-    rules = system_rules(mode)
+    rules = system_rules(mode, cfg.tools, cfg.web_search)
     t0 = time.time()
     images = image_attachments(attachments)  # 매 호출이 독립 세션이므로 이미지도 매 단계 다시 전달
     contract: dict | None = None
@@ -72,6 +72,17 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
         entry["evidence"] = evidence
     if comp:
         entry["compacted"] = {"count": comp["count"], "method": comp["method"]}
+    # 도구 사용 기록: 다음 단계와 저장 파일에 남긴다 (meta에서 꺼내 entry 최상위로)
+    actions = meta.pop("actions", None) if isinstance(meta, dict) else None
+    denials = meta.pop("denials", None) if isinstance(meta, dict) else None
+    if actions:
+        entry["actions"] = actions
+    if denials:
+        entry["denials"] = denials
+    if cfg.tools and cfg.workspace:
+        changed, rev = workspace_commit(Path(cfg.workspace), f"{DISPLAY[stage['who']]} · {stage['label']}")
+        if changed:
+            entry["workspace"] = {"changed": changed, "commit": rev}
     return entry
 
 
@@ -100,7 +111,10 @@ def run_debate(question: str, cfg: Config, max_stage: int | None = None,
         plan = plan[:max(1, max_stage)]
     history: list[dict] = []
     compaction: dict = {}
+    if cfg.tools and not cfg.workspace:  # 도구를 켰으면 라운드용 작업 폴더
+        cfg = dataclasses.replace(cfg, workspace=str(new_workspace(question)))
     run = {"question": question, "attachments": attachments or [], "config": asdict(cfg),
+           "workspace": cfg.workspace or None,
            "mode": mode, "rounds": rounds, "stage_count": stage_count,
            "plan": [s["label"] for s in plan], "stages": history,
            "error": None, "status": "running", "early_stopped": False, "prior_rounds": len(prior or []),

@@ -41,7 +41,7 @@ def usage_of(entry: dict) -> dict:
         out = int(u.get("output_tokens") or 0)
         return {"in": inp, "out": out, "total": inp + out, "cost_usd": meta.get("cost_usd")}
     if u.get("total") is not None:
-        return {"in": None, "out": None, "total": int(u["total"]), "cost_usd": None}
+        return {"in": u.get("in"), "out": u.get("out"), "total": int(u["total"]), "cost_usd": None}
     return {"in": None, "out": None, "total": None, "cost_usd": None}
 
 

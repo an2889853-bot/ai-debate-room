@@ -32,6 +32,13 @@ CODEX_WINGET_EXE = (Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Wi
                     / "codex-x86_64-pc-windows-msvc.exe")
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# ---- 도구 허용 범위 (하네스 방식: 끄는 게 아니라 범위를 정하고 기록한다) ----
+WORKSPACES = ROOT / "workspace"        # 대화별 작업 폴더 (git 제외). 도구를 켠 라운드는 여기서 파일·명령을 다룬다
+TOOL_ALLOW_CMDS = ["python", "python3", "python3.14", "py", "pytest", "pip", "git", "ls", "dir", "cat", "type", "echo", "mkdir"]
+CLAUDE_FILE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
+CLAUDE_WEB_TOOLS = ["WebSearch", "WebFetch"]
+MAX_ACTION_OUTPUT = 1200               # 기록에 남기는 도구 결과 상한(글자)
+
 
 # ----------------------------------------------------------------------------
 # 설정 / 오류
@@ -48,6 +55,9 @@ class Config:
     timeout: int = 900                    # CLI 호출 1회당 최대 대기 시간(초)
     run_code: bool = False                # True면 답변의 python 코드 블록을 sandbox\_run에서 실제로 실행해 증거로 붙인다 (문법 검사는 항상)
     compact_chars: int = 60_000           # 대화 기록이 이 글자 수를 넘으면 오래된 단계를 요약해 전달 (0 = 끄기)
+    web_search: bool = False              # True면 웹 검색·페이지 읽기 허용 (Claude WebSearch/WebFetch, Codex --search)
+    tools: bool = False                   # True면 workspace 안에서 파일 읽기/쓰기와 허용 목록 명령 실행 허용 (행동은 기록에 남음)
+    workspace: str = ""                   # tools일 때 CLI 작업 폴더 (비어 있으면 sandbox\)
     claude_exe: str = ""
     codex_exe: str = ""
 
@@ -114,15 +124,61 @@ def find_codex() -> str:
     raise FileNotFoundError("codex CLI를 찾을 수 없습니다. `winget install --id OpenAI.Codex` 로 설치하세요.")
 
 
-def clean_env() -> dict[str, str]:
-    """Claude Code 세션 안에서 실행해도 중첩 세션 차단에 걸리지 않도록 관련 변수 제거."""
+def clean_env(tools: bool = False) -> dict[str, str]:
+    """Claude Code 세션 안에서 실행해도 중첩 세션 차단에 걸리지 않도록 관련 변수 제거.
+    tools=True면 모델이 부르는 `python`이 스토어 스텁이 아니라 이 프로젝트 venv로 잡히도록 PATH 앞에 .venv/Scripts를 둔다."""
     env = dict(os.environ)
     for k in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"):
         env.pop(k, None)
     env.setdefault("PYTHONIOENCODING", "utf-8")
+    if tools:
+        venv = ROOT / ".venv" / "Scripts"
+        if venv.exists():
+            env["PATH"] = str(venv) + os.pathsep + env.get("PATH", "")
     return env
 
 
 OTHER = {"claude": "gpt", "gpt": "claude"}
 
 DISPLAY = {"claude": "Claude", "gpt": "GPT", "user": "사용자"}
+
+
+# ---- 도구 허용 시 작업 폴더 (대화별 workspace, git으로 변경 추적) ----
+def cwd_for(cfg: Config) -> Path:
+    """CLI 작업 폴더: 도구가 켜져 있고 workspace가 있으면 그곳, 아니면 빈 sandbox 폴더."""
+    return Path(cfg.workspace) if getattr(cfg, "tools", False) and getattr(cfg, "workspace", "") else SANDBOX
+
+
+def git_exe() -> str | None:
+    return shutil.which("git")
+
+
+def _git(ws: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([git_exe(), "-c", "user.name=AI Debate Room", "-c", "user.email=debate@local", *args],
+                          cwd=ws, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          creationflags=CREATE_NO_WINDOW)
+
+
+def new_workspace(question: str = "") -> Path:
+    """대화별 작업 폴더를 만들고 git init (git이 있으면). 라운드 시작 시 한 번 — 같은 대화의 다음 라운드는 재사용."""
+    slug = re.sub(r"[^\w가-힣-]+", "_", (question or "").strip()[:20]).strip("_") or "ws"
+    ws = WORKSPACES / f"{datetime.now():%Y%m%d_%H%M%S}_{slug}"
+    ws.mkdir(parents=True, exist_ok=True)
+    if git_exe() and not (ws / ".git").exists():
+        subprocess.run([git_exe(), "init", "-q"], cwd=ws, capture_output=True, creationflags=CREATE_NO_WINDOW)
+    return ws
+
+
+def workspace_commit(ws: Path, message: str) -> tuple[list[str], str | None]:
+    """단계가 끝난 뒤 작업 폴더의 변경을 커밋해 증거로 남긴다. (바뀐 파일 목록, 짧은 해시). git이 없거나 변경이 없으면 ([], None)."""
+    ws = Path(ws)
+    if not git_exe() or not (ws / ".git").exists():
+        return [], None
+    status = _git(ws, "status", "--porcelain")
+    changed = [ln[3:].strip() for ln in status.stdout.splitlines() if ln.strip()]
+    if not changed:
+        return [], None
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-qm", message)
+    rev = _git(ws, "rev-parse", "--short", "HEAD").stdout.strip() or None
+    return changed, rev

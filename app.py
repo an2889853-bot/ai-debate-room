@@ -35,7 +35,7 @@ DEFAULT_SETTINGS = {
     "codex_model": D.CODEX_AUTO, "codex_effort": "xhigh",   # auto = 카탈로그 최상위 모델 자동 선택
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
     "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
-    "compact_chars": 60000,
+    "compact_chars": 60000, "web_search": False, "tools": False,
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -258,6 +258,17 @@ def render_evidence_ui(e: dict) -> None:
         st.code("\n".join(D.render_evidence(e).splitlines()[1:]), language="text")
 
 
+def render_actions_ui(e: dict) -> None:
+    """도구 사용 기록 (명령·결과·검색·파일 변경·거부). 실패나 거부가 있으면 상세를 펼쳐 보인다."""
+    acts, den = e.get("actions") or [], e.get("denials") or []
+    if not acts and not den and not (e.get("workspace") or {}).get("changed"):
+        return
+    bad = any(a.get("error") for a in acts) or bool(den)
+    st.caption(("⚠ " if bad else "🛠 ") + D.actions_summary(acts, den)
+               + (f" · 파일 변경 {len(e['workspace']['changed'])}" if (e.get("workspace") or {}).get("changed") else ""))
+    st.code("\n".join(D.render_actions(e).splitlines()[1:]), language="text")
+
+
 def render_entry(e: dict, expanded: bool = False) -> None:
     who, label = e["who"], e["label"]
     if who == "user":
@@ -279,6 +290,7 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
                 render_evidence_ui(e)
+                render_actions_ui(e)
                 if e.get("compacted"):
                     st.caption(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 "
                                + ("(Claude 요약)" if e["compacted"].get("method") == "claude" else "(요약 호출 실패 → 앞부분만 잘라 붙임)"))
@@ -290,6 +302,7 @@ def render_entry(e: dict, expanded: bool = False) -> None:
                 if e.get("contract"):
                     st.caption("🧾 " + D.contract_line(e["contract"]))
                 render_evidence_ui(e)
+                render_actions_ui(e)
                 if e.get("compacted"):
                     st.caption(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 "
                                + ("(Claude 요약)" if e["compacted"].get("method") == "claude" else "(요약 호출 실패 → 앞부분만 잘라 붙임)"))
@@ -329,6 +342,8 @@ def render_round(run: dict) -> None:
         render_entry(e)
     render_contract_summary(run.get("stages", []))
     render_eval_summary(run.get("stages", []))
+    if run.get("workspace"):
+        st.caption(f"📁 작업 폴더: {run['workspace']} (단계마다 git 커밋 — 되돌리려면 그 폴더에서 git log)")
     if D.usage_summary_line(run.get("stages", [])):
         st.caption(D.usage_summary_line(run.get("stages", [])))
     if run.get("early_stopped"):
@@ -356,7 +371,7 @@ def resume_round(idx: int) -> None:
         "question": run["question"], "attachments": run.get("attachments", []), "cfg": cfg,
         "mode": run.get("mode", "general"), "rounds": run.get("rounds", 1),
         "stage_count": run.get("stage_count", len(plan)), "early_stop": True, "eval_revise": True,
-        "compaction": dict(run.get("compaction") or {}),
+        "compaction": dict(run.get("compaction") or {}), "workspace": run.get("workspace"),
         "plan": plan, "stages": list(run.get("stages", [])), "prior": prior, "prior_rounds": len(prior),
         "status": "running", "early_stopped": bool(run.get("early_stopped")), "started": run.get("started"),
         "first": run.get("first", "claude"), "final_who": run.get("final_who"),
@@ -478,6 +493,12 @@ with st.sidebar:
     run_code = st.checkbox("🔬 코드 블록 실제 실행 (python · sandbox\\_run)", value=bool(s.get("run_code", False)), disabled=busy,
                            help="답변 속 ```python 블록을 이 PC의 venv 파이썬으로 실행해 exit 코드·출력을 다음 단계에 증거로 붙입니다. "
                                 "문법 검사(json/toml은 파싱)는 항상 하고, 실행은 켰을 때만. 모델이 쓴 코드가 그대로 실행되니 믿을 수 있는 주제에서만 켜세요.")
+    web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", False)), disabled=busy,
+                             help="Claude는 WebSearch/WebFetch, Codex는 --search. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
+                                  "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
+    tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", False)), disabled=busy,
+                        help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
+                             "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
 
     order_mode = st.radio("순서", ["기본", "직접 편집"], index=1 if s["use_custom"] else 0, horizontal=True, disabled=busy,
                           help="기본: 먼저 답하는 AI와 최종 정리 AI만 고르면 나머지 역할이 자동으로 정해짐. 직접 편집: 표에서 단계를 하나씩 구성")
@@ -595,7 +616,7 @@ with st.sidebar:
         claude_model=None if claude_model.startswith("(") else claude_model,
         claude_effort=None if claude_effort.startswith("(") else claude_effort,
         codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
-        compact_chars=compact_chars,
+        compact_chars=compact_chars, web_search=web_search, tools=tools,
     )
     rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
     st.caption("현재 설정 → " + (
@@ -609,6 +630,7 @@ with st.sidebar:
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
                     "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
                     "evaluate": evaluate, "eval_revise": eval_revise, "compact_chars": compact_chars,
+                    "web_search": web_search, "tools": tools,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:
@@ -683,7 +705,8 @@ def finalize_active(status: str, error: str | None = None) -> None:
         live["cancel"].set()
     now = datetime.now().isoformat(timespec="seconds")
     round_ = {k: active.get(k) for k in ("question", "attachments", "mode", "rounds", "stage_count", "stages",
-                                         "early_stopped", "started", "prior_rounds", "first", "final_who", "compaction")}
+                                         "early_stopped", "started", "prior_rounds", "first", "final_who", "compaction",
+                                         "workspace")}
     round_.update({"plan": [st_["label"] for st_ in active["plan"]],
                    "plan_steps": [[st_["who"], st_["kind"]] for st_ in active["plan"]],  # 재개용
                    "config": D.asdict(active["cfg"]), "contract": D.contract_summary(active["stages"]),
@@ -693,6 +716,8 @@ def finalize_active(status: str, error: str | None = None) -> None:
         ss.conv = D.new_conversation(active["question"])
     ss.conv["rounds"].append(round_)
     ss.conv["updated"] = now
+    if active.get("workspace"):
+        ss.conv["workspace"] = active["workspace"]  # 다음 라운드가 같은 작업 폴더를 이어 쓴다
     if ss.settings["autosave"]:
         D.save_conversation(ss.conv)
     ss.active, ss.live = None, None
@@ -851,13 +876,19 @@ if submitted is not None and ((submitted.text or "").strip() or submitted.files)
     except FileNotFoundError as e:
         st.error(str(e))
         st.stop()
+    workspace = None
+    if cfg.tools:  # 대화별 작업 폴더 — 같은 대화면 재사용, 없으면 새로
+        workspace = (ss.conv or {}).get("workspace")
+        if not workspace or not Path(workspace).exists():
+            workspace = str(D.new_workspace(question))
+        cfg.workspace = workspace
     prior_rounds = ss.conv["rounds"] if ss.conv else []
     prior = [{"question": r["question"], "final": D.final_of(r)} for r in prior_rounds if D.final_of(r)]
     ss.active = {
         "question": question, "attachments": attachments, "cfg": cfg, "mode": mode, "rounds": rounds,
         "stage_count": stage_count, "early_stop": early_stop, "eval_revise": eval_revise, "plan": list(PLAN), "stages": [], "prior": prior,
         "prior_rounds": len(prior), "status": "running", "early_stopped": False, "pause_next": False,
-        "first": first_val, "final_who": final_val,
+        "first": first_val, "final_who": final_val, "workspace": workspace,
         "started": datetime.now().isoformat(timespec="seconds"),
     }
     ss.live = None

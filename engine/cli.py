@@ -32,10 +32,12 @@ TickCB = Callable[[float], None]
 def _popen_stream(cmd: list[str], prompt: str, timeout: int,
                   on_line: Callable[[str], None] | None = None,
                   on_tick: TickCB | None = None,
-                  cancel: threading.Event | None = None) -> tuple[int, str, str, str | None]:
-    """반환 (returncode, stdout, stderr, killed_reason). killed_reason: None | "timeout" | "cancelled"."""
+                  cancel: threading.Event | None = None, cwd: Path | None = None,
+                  env: dict | None = None) -> tuple[int, str, str, str | None]:
+    """반환 (returncode, stdout, stderr, killed_reason). killed_reason: None | "timeout" | "cancelled".
+    cwd/env를 주지 않으면 빈 sandbox 폴더와 clean_env()."""
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            cwd=SANDBOX, env=clean_env(), text=True, encoding="utf-8", errors="replace",
+                            cwd=cwd or SANDBOX, env=env or clean_env(), text=True, encoding="utf-8", errors="replace",
                             bufsize=1, creationflags=CREATE_NO_WINDOW)
     out_q: queue.Queue[str | None] = queue.Queue()
     out_lines: list[str] = []
@@ -105,6 +107,128 @@ def _popen_stream(cmd: list[str], prompt: str, timeout: int,
 DeltaCB = Callable[[str], None]
 
 
+# ---- 도구 허용 인자와 행동 기록 파서 ----
+def claude_tool_args(cfg: Config) -> list[str]:
+    """도구가 꺼져 있으면 --tools "" (전부 비활성). 켜져 있으면 허용 목록만: -p 모드는 승인을 물을 수 없으므로
+    --allowedTools에 없는 명령은 자동 거부되고, 그 거부가 곧 경계다. --dangerously-skip-permissions는 쓰지 않는다."""
+    if not (cfg.tools or cfg.web_search):
+        return ["--tools", ""]
+    tools: list[str] = []
+    allowed: list[str] = []
+    if cfg.tools:
+        tools += CLAUDE_FILE_TOOLS
+        allowed += [f"Bash({c} *)" for c in TOOL_ALLOW_CMDS] + ["Read", "Glob", "Grep", "Edit", "Write"]
+    if cfg.web_search:
+        tools += CLAUDE_WEB_TOOLS
+        allowed += CLAUDE_WEB_TOOLS
+    args = ["--tools", ",".join(tools), "--allowedTools", " ".join(allowed)]
+    if cfg.tools:
+        args += ["--permission-mode", "acceptEdits"]  # 파일 편집은 자동 허용, 그 외는 허용 목록으로
+    return args
+
+
+def codex_tool_args(cfg: Config) -> list[str]:
+    """샌드박스는 tools면 workspace-write, 아니면 read-only (danger-full-access는 쓰지 않음). 웹은 --search.
+    행동을 기록하려면 이벤트가 필요하므로 도구가 켜져 있을 때만 --json."""
+    args = ["--sandbox", "workspace-write" if cfg.tools else "read-only", "-C", str(cwd_for(cfg))]
+    if cfg.web_search:
+        args.append("--search")
+    if cfg.tools or cfg.web_search:
+        args.append("--json")
+    return args
+
+
+def _tool_input_text(name: str | None, inp) -> str:
+    inp = inp if isinstance(inp, dict) else {}
+    for k in ("command", "file_path", "query", "url", "pattern", "path", "prompt"):
+        if inp.get(k):
+            return str(inp[k])[:300]
+    return json.dumps(inp, ensure_ascii=False)[:300]
+
+
+def _tool_result_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text", "")) if isinstance(b, dict) else str(b) for b in content)
+    return json.dumps(content, ensure_ascii=False) if content is not None else ""
+
+
+class ClaudeEventParser:
+    """claude -p stream-json 이벤트에서 도구 사용(tool_use)과 결과(tool_result)를 모아 actions 목록으로.
+    각 항목 {"tool", "input", "output", "error"}. 같은 tool_use id가 반복돼도 한 번만 센다."""
+
+    def __init__(self) -> None:
+        self.actions: list[dict] = []
+        self._pending: dict[str, dict] = {}
+        self._seen: set[str] = set()
+
+    def feed(self, obj: dict) -> None:
+        t = obj.get("type")
+        msg = obj.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            return
+        if t == "assistant":
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    tid = str(b.get("id") or "")
+                    if tid and tid in self._seen:
+                        continue
+                    a = {"tool": str(b.get("name") or "?"), "input": _tool_input_text(b.get("name"), b.get("input")),
+                         "output": "", "error": False}
+                    self.actions.append(a)
+                    if tid:
+                        self._seen.add(tid)
+                        self._pending[tid] = a
+        elif t == "user":
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    a = self._pending.pop(str(b.get("tool_use_id") or ""), None)
+                    if a is not None:
+                        a["output"] = _tool_result_text(b.get("content"))[:MAX_ACTION_OUTPUT]
+                        a["error"] = bool(b.get("is_error"))
+
+
+def parse_codex_events(stdout: str) -> tuple[list[dict], dict | None, str]:
+    """codex exec --json JSONL에서 (actions, usage{in,out,total}|None, 마지막 agent_message 텍스트).
+    item 종류 이름은 버전마다 다를 수 있어 부분 일치로 본다(command/search/file·patch)."""
+    actions: list[dict] = []
+    usage: dict | None = None
+    last_text = ""
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        t = str(obj.get("type") or "")
+        it = obj.get("item") if isinstance(obj.get("item"), dict) else {}
+        k = str(it.get("type") or "")
+        if t == "item.completed":
+            if "command" in k:
+                rc = it.get("exit_code")
+                out = it.get("aggregated_output") or it.get("output") or ""
+                actions.append({"tool": "Bash", "input": str(it.get("command") or "")[:300],
+                                "output": str(out)[:MAX_ACTION_OUTPUT], "error": rc not in (None, 0)})
+            elif "search" in k:
+                actions.append({"tool": "WebSearch", "input": str(it.get("query") or "")[:300], "output": "", "error": False})
+            elif "file" in k or "patch" in k:
+                changes = it.get("changes") or it.get("files") or []
+                names = [str(c.get("path") or c) if isinstance(c, dict) else str(c) for c in changes] if isinstance(changes, list) else [str(changes)]
+                actions.append({"tool": "Edit", "input": ", ".join(names)[:300], "output": "", "error": False})
+            elif k == "agent_message":
+                last_text = str(it.get("text") or "")
+        elif t == "turn.completed":
+            u = obj.get("usage")
+            if isinstance(u, dict) and (u.get("input_tokens") is not None or u.get("output_tokens") is not None):
+                i, o = int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0)
+                usage = {"in": i, "out": o, "total": i + o}
+    return actions, usage, last_text
+
+
 def _claude_image_message(prompt: str, images: list[dict]) -> str:
     """이미지가 있을 때 --input-format stream-json 으로 넣을 사용자 메시지 한 줄(JSON)."""
     import base64
@@ -121,12 +245,12 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
     """on_delta가 있으면 stream-json으로 글자 단위 델타를 받는다(누적 텍스트를 넘김).
     images가 있으면 --input-format stream-json 으로 base64 이미지 블록을 함께 보낸다 (도구 불필요)."""
     images = image_attachments(images)
-    stream = on_delta is not None or bool(images)
+    stream = on_delta is not None or bool(images) or bool(cfg.tools or cfg.web_search)  # 도구 이벤트를 기록하려면 stream-json
     cmd = [cfg.claude_exe, "-p", "--output-format", "stream-json" if stream else "json",
-           "--tools", "",                 # 도구 전부 비활성화 (텍스트 토론만)
            "--no-session-persistence",    # 세션 파일 저장 안 함
            "--strict-mcp-config",         # MCP 서버 로드 안 함
            "--system-prompt", system_prompt]
+    cmd += claude_tool_args(cfg)          # 꺼져 있으면 --tools "" (전부 비활성), 켜져 있으면 허용 목록만
     if stream:
         cmd += ["--verbose", "--include-partial-messages"]  # stream-json은 --verbose 필수
     if images:
@@ -139,6 +263,7 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
 
     acc: list[str] = []
     result_obj: dict | None = None
+    parser = ClaudeEventParser()  # 도구 사용 기록
 
     def on_line(line: str) -> None:
         nonlocal result_obj
@@ -150,6 +275,7 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
         except json.JSONDecodeError:
             return
         t = obj.get("type")
+        parser.feed(obj)
         if t == "stream_event":
             ev = obj.get("event") or {}
             delta = ev.get("delta") or {}
@@ -160,7 +286,8 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
         elif t == "result":
             result_obj = obj
 
-    rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, on_line if stream else None, on_tick, cancel)
+    rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, on_line if stream else None, on_tick, cancel,
+                                         cwd=cwd_for(cfg), env=clean_env(cfg.tools))
     if on_delta is None and stream and result_obj is None:
         # 이미지 때문에 stream-json을 썼지만 델타 콜백이 없는 경우: result 이벤트를 직접 찾는다
         for line in out.splitlines():
@@ -188,7 +315,8 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
         raise CLIError("claude", stage, f"응답 오류 subtype={data.get('subtype')}", rc, str(data.get("result", ""))[:2000])
     meta = {"session_id": data.get("session_id"), "duration_ms": data.get("duration_ms"),
             "usage": data.get("usage"), "cost_usd": data.get("total_cost_usd"),   # API 환산 비용 (구독이면 실제 과금 아님)
-            "models": list((data.get("modelUsage") or {}).keys())}
+            "models": list((data.get("modelUsage") or {}).keys()),
+            "actions": parser.actions, "denials": data.get("permission_denials") or []}  # 도구 사용 기록·거부된 요청
     return str(data.get("result", "")).strip(), meta
 
 
@@ -199,9 +327,8 @@ def call_codex(cfg: Config, prompt: str, stage: str,
     images는 `-i 경로`로 첨부한다 (codex exec --help의 -i/--image)."""
     fd, out_path = tempfile.mkstemp(prefix="codex_last_", suffix=".txt")
     os.close(fd)
-    cmd = [cfg.codex_exe, "exec",
-           "--skip-git-repo-check", "--sandbox", "read-only", "--ephemeral",
-           "--color", "never", "-C", str(SANDBOX), "-o", out_path]
+    cmd = [cfg.codex_exe, "exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-o", out_path]
+    cmd += codex_tool_args(cfg)  # 샌드박스 정책·작업 폴더·웹 검색·(도구 켜면) --json
     for a in image_attachments(images):
         cmd += ["-i", a["path"]]
     model, effort, note = resolve_codex(cfg)  # 'auto' → 카탈로그 최상위, effort → 지원 범위로 조정
@@ -212,7 +339,8 @@ def call_codex(cfg: Config, prompt: str, stage: str,
         cmd += ["-c", f"model_reasoning_effort={effort}"]
     cmd.append("-")  # 프롬프트를 stdin에서 읽음
     try:
-        rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, None, on_tick, cancel)
+        rc, out, err, killed = _popen_stream(cmd, prompt, cfg.timeout, None, on_tick, cancel,
+                                             cwd=cwd_for(cfg), env=clean_env(cfg.tools))
         text = ""
         if Path(out_path).exists():
             text = Path(out_path).read_text(encoding="utf-8", errors="replace").strip()
@@ -232,6 +360,8 @@ def call_codex(cfg: Config, prompt: str, stage: str,
             if m:
                 msg = "API 오류: " + m.group(1).replace('\\"', '"')[:400]
         raise CLIError("codex", stage, msg, rc, err or out)
+    if not text and (cfg.tools or cfg.web_search):
+        text = parse_codex_events(out)[2]  # --json이면 마지막 agent_message로 보완
     if not text:
         raise CLIError("codex", stage, "마지막 메시지 파일이 비어 있음", rc, err or out)
     # codex exec는 시작 시 "model: ...", "reasoning effort: ..." 헤더를 찍는다(stderr). 실제 적용값 확인용.
@@ -244,6 +374,11 @@ def call_codex(cfg: Config, prompt: str, stage: str,
     meta = {"model": header.get("model"), "reasoning_effort": header.get("reasoning effort"),
             "resolve_note": note, "stdout_tail": out[-400:],
             "usage": {"total": int(m_tok.group(1).replace(",", ""))} if m_tok else None}
+    if cfg.tools or cfg.web_search:
+        actions, usage_json, _ = parse_codex_events(out)
+        meta["actions"] = actions
+        if usage_json:
+            meta["usage"] = usage_json  # turn.completed의 입력/출력 토큰
     return text, meta
 
 

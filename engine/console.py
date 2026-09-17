@@ -58,6 +58,8 @@ def console_event(e: dict) -> None:
             print(f"🧑‍⚖️ 독립 평가: {eval_verdict(e) or '(판정 형식 없음)'}\n", flush=True)
         if e.get("compacted"):
             print(f"🗜 이전 단계 {e['compacted']['count']}개를 요약해 전달 ({e['compacted']['method']})\n", flush=True)
+        if e.get("actions") or e.get("denials") or (e.get("workspace") or {}).get("changed"):
+            print(f"🛠 {actions_summary(e.get('actions') or [], e.get('denials'))}\n{render_actions(e)}\n", flush=True)
     elif e["type"] == "error":
         cli = "claude" if e["who"] == "claude" else "codex"
         print(f"\n❌ 오류 — 단계 {e['index']}/{e['total']} {name} ({cli} CLI)\n{e['error']}\n", flush=True)
@@ -110,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--run-code", action="store_true", help="답변의 python 코드 블록을 sandbox\\_run에서 실제로 실행해 증거로 붙임 (문법 검사는 항상)")
     ap.add_argument("--compact-chars", type=int, default=Config.compact_chars,
                     help="대화 기록이 이 글자 수를 넘으면 오래된 단계를 요약해 전달 (기본 60000, 0=끄기)")
+    ap.add_argument("--web", action="store_true", help="웹 검색·페이지 읽기 허용 (Claude WebSearch/WebFetch, Codex --search)")
+    ap.add_argument("--tools", action="store_true",
+                    help="라운드용 workspace\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등) 실행 허용. 행동은 기록에 남고 단계마다 git 커밋")
     ap.add_argument("--check", action="store_true", help="두 CLI가 응답하는지만 확인")
     ap.add_argument("--list-codex-models", action="store_true", help="선택 가능한 Codex 모델과 effort 출력")
     ap.add_argument("--stats", action="store_true", help="chats\\ 저장 대화 전체 통계 (단계 시간, 토큰, 반영 계약, 평가)")
@@ -124,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = Config(claude_model=a.claude_model or None, claude_effort=a.claude_effort or None,
                  codex_model=a.codex_model or None, codex_effort=a.codex_effort or None, timeout=a.timeout,
-                 run_code=a.run_code, compact_chars=a.compact_chars)
+                 run_code=a.run_code, compact_chars=a.compact_chars, web_search=a.web, tools=a.tools)
     try:
         cfg.claude_exe = find_claude()
         cfg.codex_exe = find_codex()

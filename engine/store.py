@@ -79,6 +79,10 @@ def _round_lines(run: dict) -> list[str]:
             lines += [f"> 🧑‍⚖️ 독립 평가: {eval_verdict(h) or '(판정 형식 없음)'}", ""]
         if h.get("compacted"):
             lines += [f"> 🗜 이전 단계 {h['compacted']['count']}개를 요약해 전달 ({h['compacted']['method']})", ""]
+        if h.get("actions") or h.get("denials") or (h.get("workspace") or {}).get("changed"):
+            lines += [f"> 🛠 {actions_summary(h.get('actions') or [], h.get('denials'))}"] + [f"> {ln}" for ln in render_actions(h).splitlines()[1:]] + [""]
+    if run.get("workspace"):
+        lines += [f"> 📁 작업 폴더: {run['workspace']}", ""]
     if usage_summary_line(run.get("stages", [])):
         lines += [f"> {usage_summary_line(run.get('stages', []))}", ""]
     if run.get("early_stopped"):

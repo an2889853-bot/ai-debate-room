@@ -190,5 +190,10 @@ def plan_preview(plan: list[dict]) -> str:
     return " → ".join(f"{DISPLAY[s['who']]}·{s['label']}" for s in plan)
 
 
-def system_rules(mode: str) -> str:
-    return COMMON_RULES + MODES.get(mode, MODES["general"])["rules"]
+def system_rules(mode: str, tools: bool = False, web: bool = False) -> str:
+    """공통 규칙(도구 허용 여부 반영) + 모드 규칙. 웹이 켜지면 투자 모드의 '최신 시세는 알 수 없다'도 '검색으로 확인하라'로."""
+    rules = MODES.get(mode, MODES["general"])["rules"]
+    if web:
+        rules = rules.replace("최신 시세·뉴스는 알 수 없으므로 '확인 필요' 항목으로 분리하십시오.",
+                              "최신 시세·뉴스는 웹 검색으로 확인하고 출처 URL·확인 시각을 적으십시오.")
+    return COMMON_RULES_HEAD + tool_rules(tools, web) + COMMON_RULES_TAIL + rules

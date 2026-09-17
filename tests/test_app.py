@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
 import debate as D
-from conftest import ROOT
+from conftest import ROOT, patch_all
 
 APP = str(ROOT / "app.py")
 
@@ -208,6 +209,23 @@ def test_code_review_mode_shows_evidence(isolated, fake_stages):
     assert [(b["check"], b["ok"]) for b in ev] == [("syntax", True), ("syntax", False)]
     assert "[프로그램 검사 · Claude · Initial의 코드 블록" in fake.calls[1]["prompt"]
     assert any("코드 검사 2개 블록" in c.value for c in at.caption)
+
+
+def test_tools_toggle_creates_workspace(isolated, fake_stages, monkeypatch):
+    """🛠 파일·명령 허용을 켜면 대화별 workspace가 생기고 라운드·대화에 기록된다. 두 토글 모두 기본 꺼짐."""
+    patch_all(monkeypatch, "WORKSPACES", isolated / "ws")
+    fake_stages(review_ok=False)
+    at = boot()
+    assert not checkbox(at, "🛠 파일·명령").value and not checkbox(at, "🌐 웹 검색").value
+    checkbox(at, "🛠 파일·명령").set_value(True)
+    configure(at, stage_count=3, first="claude")
+    submit(at, "도구 테스트")
+    drive(at)
+    rnd = last_round(at)
+    assert rnd["workspace"] and Path(rnd["workspace"]).parent == isolated / "ws" and rnd["config"]["tools"] is True
+    assert rnd["config"]["workspace"] == rnd["workspace"]
+    assert at.session_state["conv"]["workspace"] == rnd["workspace"]
+    assert any("📁 작업 폴더" in c.value for c in at.caption)
 
 
 def test_unresolved_issues_show_warning(isolated, fake_stages):

@@ -31,6 +31,42 @@ from .usage import *  # noqa: F401,F403
 # ----------------------------------------------------------------------------
 # 프롬프트 구성
 # ----------------------------------------------------------------------------
+def actions_summary(actions: list[dict], denials: list | None = None) -> str:
+    """캡션 한 줄: '도구 3회 — Bash 2 · WebSearch 1 (실패 1) · 거부 1'."""
+    if not actions and not denials:
+        return "도구 사용 없음"
+    counts: dict[str, int] = {}
+    for a in actions or []:
+        counts[a["tool"]] = counts.get(a["tool"], 0) + 1
+    s = f"도구 {len(actions or [])}회 — " + " · ".join(f"{k} {v}" for k, v in counts.items()) if actions else "도구 사용 없음"
+    err = sum(1 for a in actions or [] if a.get("error"))
+    if err:
+        s += f" (실패 {err})"
+    if denials:
+        s += f" · 거부 {len(denials)}"
+    return s
+
+
+def render_actions(h: dict) -> str:
+    """대화 기록에 들어가는 도구 사용 블록 — 모델의 말과 구분되는 프로그램 머리말."""
+    lines = [f"[프로그램 기록 · {DISPLAY[h['who']]} · {h['label']}의 도구 사용 — 사람이 아니라 프로그램이 기록한 실제 명령과 결과]"]
+    for a in h.get("actions") or []:
+        out = (a.get("output") or "").strip().replace("\n", " ⏎ ")
+        line = f"- {a['tool']}: {a['input']}"
+        if out:
+            line += f" → {out[:300]}"
+        if a.get("error"):
+            line += " [실패]"
+        lines.append(line)
+    for d in h.get("denials") or []:
+        name = d.get("tool_name") or d.get("tool") or "?"
+        lines.append(f"- ⚠ 거부됨 (허용 목록 밖): {name} {json.dumps(d.get('tool_input'), ensure_ascii=False)[:200]}")
+    ws = h.get("workspace") or {}
+    if ws.get("changed"):
+        lines.append(f"- 작업 폴더 변경: {', '.join(ws['changed'])}" + (f" (git 커밋 {ws['commit']})" if ws.get("commit") else ""))
+    return "\n".join(lines)
+
+
 def render_prior(prior: list[dict]) -> str:
     """이전 라운드(질문 + 최종 답변)를 참고용 블록으로 렌더링. UI에서 이어지는 질문에 사용."""
     if not prior:
@@ -53,6 +89,8 @@ def render_transcript(question: str, history: list[dict], attachments: list[dict
         parts.append(f"[{DISPLAY[h['who']]} · {h['label']}]\n{h['content'].strip()}")
         if h.get("evidence"):
             parts.append(render_evidence(h))
+        if h.get("actions") or h.get("denials") or (h.get("workspace") or {}).get("changed"):
+            parts.append(render_actions(h))
     return "\n\n".join(parts)
 
 

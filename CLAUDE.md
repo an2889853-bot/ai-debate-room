@@ -26,7 +26,7 @@ Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반�
 - `engine/`이나 `debate.py`를 고치면 8501 서버를 **재시작**한다 (import된 모듈이 옛것으로 남음). 8501 프로세스 종료 → `launch_ui.cmd`.
 - `engine/` 모듈은 의존 순서(config → attachments → cli → contract → plan → evidence → usage → prompt → compact → runner → store → console)대로 앞쪽만 참조한다. 테스트에서 대역은 반드시 `conftest.patch_all()`로 바꾼다(star-import 때문에 같은 이름이 여러 모듈에 있음).
 - `.cmd` 파일은 ASCII만 (cmd.exe가 CP949로 읽음).
-- 코드 수정 → `pytest`(84개, 약 8초) → 커밋. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
+- 코드 수정 → `pytest`(96개, 약 7초) → 커밋. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
 - 라운드 dict의 `stages`는 실행된 단계 목록, 단계 수는 `stage_count` (이름 충돌 주의).
 - 사이드바를 만지면 `ui_settings.json`이 저장된다. 이 파일을 직접 고칠 땐 서버를 끄고 한다.
 
@@ -37,6 +37,7 @@ cd C:\Users\LG\ai-debate-room
 .\.venv\Scripts\python.exe debate.py "질문" [--stages 5] [--first gpt] [--mode plc] [--file 경로]
 .\.venv\Scripts\python.exe debate.py --check      # 두 CLI 응답 확인 (실제 호출 2회)
 .\.venv\Scripts\python.exe debate.py --stats      # 저장된 대화 전체 통계
+.\.venv\Scripts\python.exe tools\probe_tools.py   # 도구 허용 실기 프로브 (실제 호출 3회 — 사람이 직접)
 .\.venv\Scripts\python.exe -m pytest              # 테스트 (실제 CLI 호출 없음)
 ```
 
@@ -49,7 +50,9 @@ ai-debate-room\
   app.py                  Streamlit 채팅 UI
   launch_ui.cmd           바탕화면 바로가기용 런처 / start_ui.cmd  항상 새 서버
   requirements.txt        실행 의존성 (고정 버전) / requirements-dev.txt  +pytest
-  tests\                  conftest(픽스처·가짜 단계·가짜 CLI), test_plan(엔진), test_contract(반영 계약), test_evidence(코드 검사), test_eval(독립 평가), test_usage(관측), test_compact(압축), test_app(AppTest 종단)
+  tests\                  conftest(픽스처·patch_all·가짜 단계·가짜 CLI), test_plan·test_contract·test_evidence·test_eval·test_usage·test_compact·test_tools(도구), test_app(AppTest 종단)
+  tools\                  probe_tools.py — 도구 허용 실기 프로브 (pytest 아님, 원본 출력은 probe_out\ — git 제외)
+  workspace\              도구를 켠 라운드의 작업 폴더 (대화별, git init, 단계마다 커밋 — git 제외)
   docs\                   ARCHITECTURE·DECISIONS·SETUP, CLI help 원문, codex-models.json
   .streamlit\             config.toml (Deploy 버튼 숨김, 통계 끔)
   .venv\                  Python 3.14 가상환경 (git 제외)
@@ -63,6 +66,7 @@ ai-debate-room\
 - 검토 단계는 마지막 줄 `[판정: 수정 필요 | 추가 수정 불필요]` 계약. 조기 종료가 켜져 있으면 '불필요' 시 FINAL로 건너뛴다.
 - **지적 번호별 반영 계약 (default-FAIL)**: 검토/재검사는 `[지적 N] …` 줄로, 반박/최종은 번호마다 `[반영 N]`/`[반박 N]` 줄로. `execute_stage()`가 검사해 빠진 번호가 있으면 같은 단계를 1회 재요청, 그래도 빠지면 라운드에 "⚠ 미처리 지적" 경고. 결과는 `entry["contract"]`, 라운드 `contract` 합계.
 - **코드 블록 검사 (외부 증거)**: 답변의 ```` ```python ```` 블록은 항상 문법 검사(json/toml은 파싱), `run_code`를 켜면 `sandbox\_run`에서 실제 실행(30초, stdin 차단). 결과 `entry["evidence"]`가 다음 단계 프롬프트에 `[프로그램 검사 · …]` 블록으로 들어간다. 실행은 기본 꺼짐 — 모델 코드가 이 PC에서 그대로 돈다.
+- **도구 허용 (기본 꺼짐, 하네스 방식)**: 🌐 `web_search`(Claude WebSearch/WebFetch, Codex `--search`), 🛠 `tools`(대화별 `workspace\` 안에서 파일 읽기/쓰기 + 허용 목록 명령 python·pytest·pip·git·ls…, Claude `--allowedTools`+`acceptEdits`, Codex `workspace-write`). 허용 목록 밖은 자동 거부. 실행한 명령·결과·검색·파일 변경은 `entry["actions"]` → 기록에 `[프로그램 기록 · …]` 블록으로 들어가고 단계마다 git 커밋. **실기 검증 전** — `tools\probe_tools.py`를 사람이 실행해 확인.
 - **컨텍스트 압축**: 기록이 `compact_chars`(기본 60,000자)를 넘으면 마지막 2단계만 원문, 그 앞은 Claude(effort low)가 요약한 `[요약 · 이전 단계 n개]` 블록으로. 라운드 캐시(내용 해시 키), 실패 시 앞부분 잘라 붙임. 계약·조기 종료·평가 판정은 항상 원문으로.
 - **관측**: 단계 캡션에 토큰·API 환산 비용(Claude만 정확, GPT는 CLI가 안 찍어 `?`), 라운드 끝에 ⏱ 합계, 저장 dict `usage`. 전체 통계는 `debate.py --stats` 또는 사이드바 📊 (조기 종료율·계약 재요청·평가 PASS율까지).
 - **독립 평가자**: `evaluate`(기본 켬)면 FINAL 뒤에 최종 정리를 안 쓴 쪽 AI가 `[평가: PASS|NEEDS_WORK]` + `[지적 N]`으로 채점. NEEDS_WORK면 `FINAL 2` + `Eval 2`를 1회만 추가(`adjust_plan_after()` — 조기 종료도 여기서, UI·콘솔 공용). FINAL 2는 평가자 지적을 반영 계약으로 검사받는다. `final_of()`는 FINAL 2 우선.
@@ -73,6 +77,6 @@ ai-debate-room\
 ## 현재 상태 (2026-09-16)
 - 기능 완성, 서버 정상(포트 8501). 기본 3단계, 사용자 설정은 GPT 먼저 답함.
 - 환경: Claude Code CLI 2.1.267(`~\.local\bin`), Codex 0.146.1(winget), Python 3.14.7(uv), streamlit 1.63.0, pypdf, pytest. 두 CLI 모두 구독 로그인됨.
-- **하네스 엔지니어링 업그레이드 (6단계)**: 1) 저장소 위생 ✅ (git, pytest, requirements) → 2) 문서 분리 ✅ (이 지도 + docs/) → 3) 증거 기반 검증 루프 ✅ (3-1 지적 번호별 반영 계약, 3-2 코드 블록 검사·실행, 3-3 독립 평가자) → 4) 토큰·비용 관측 ✅ → 5) 컨텍스트 압축 ✅ → 6) engine/ 모듈 분리 ✅ (2026-09-17). **6단계 전부 완료.** 다음 할 일은 실전 검증: 실제 토론을 돌려 계약 재요청·평가 배지·요약이 어떻게 보이는지 확인하고 지시문을 조정. 배경과 각 단계 내용은 DECISIONS.md 2026-09-16 항목.
+- **하네스 엔지니어링 업그레이드 (6단계)**: 1) 저장소 위생 ✅ (git, pytest, requirements) → 2) 문서 분리 ✅ (이 지도 + docs/) → 3) 증거 기반 검증 루프 ✅ (3-1 지적 번호별 반영 계약, 3-2 코드 블록 검사·실행, 3-3 독립 평가자) → 4) 토큰·비용 관측 ✅ → 5) 컨텍스트 압축 ✅ → 6) engine/ 모듈 분리 ✅ (2026-09-17) → 7) 도구 허용·행동 기록 ✅ (코드·테스트 완료, **실기 검증 전**). 다음 할 일: 사용자가 `tools\probe_tools.py`를 돌려 이벤트 형식·허용 목록 동작 확인 → 파서 조정 → 실제 토론으로 계약 재요청·평가 배지·요약·도구 기록 확인. 배경과 각 단계 내용은 DECISIONS.md 2026-09-16 항목.
 - 3단계(반영 계약·코드 검사·독립 평가)는 실제 모델이 `[지적 N]`/`[반영 N]`/`[평가: …]` 형식을 얼마나 지키는지 아직 실전 검증 전 — 다음 실제 토론에서 재요청 횟수·미처리 경고·평가 배지를 확인하고 자주 어긋나면 지시문을 손볼 것.
-- 알려진 제한: Codex 글자 단위 스트리밍 불가·토큰 수 미확인, 브라우저 새로고침 시 진행 중 라운드 유실, 첨부는 요약 없이 150,000자 절단, 평가자·요약자도 모델이라 같은 오해를 공유할 수 있음.
+- 알려진 제한: Codex 글자 단위 스트리밍 불가(토큰은 도구를 켰을 때만 `--json`으로 잡힘), 브라우저 새로고침 시 진행 중 라운드 유실, 첨부는 요약 없이 150,000자 절단, 평가자·요약자도 모델이라 같은 오해를 공유할 수 있음. 🛠 도구는 허용 목록 안이라도 임의 코드 실행 — 믿을 수 있는 작업에서만, LAN 공유와 절대 같이 켜지 않기.
