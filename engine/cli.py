@@ -116,13 +116,14 @@ def claude_tool_args(cfg: Config) -> list[str]:
     tools: list[str] = []
     allowed: list[str] = []
     if cfg.tools:
-        tools += CLAUDE_FILE_TOOLS
-        allowed += [f"Bash({c} *)" for c in TOOL_ALLOW_CMDS] + ["Read", "Glob", "Grep", "Edit", "Write"]
+        file_tools = [t for t in CLAUDE_FILE_TOOLS if not (cfg.readonly and t in ("Edit", "Write"))]  # 평가자는 쓰기 금지
+        tools += file_tools
+        allowed += [f"Bash({c} *)" for c in TOOL_ALLOW_CMDS] + [t for t in file_tools if t != "Bash"]
     if cfg.web_search:
         tools += CLAUDE_WEB_TOOLS
         allowed += CLAUDE_WEB_TOOLS
     args = ["--tools", ",".join(tools), "--allowedTools", " ".join(allowed)]
-    if cfg.tools:
+    if cfg.tools and not cfg.readonly:
         args += ["--permission-mode", "acceptEdits"]  # 파일 편집은 자동 허용, 그 외는 허용 목록으로
     return args
 
@@ -132,7 +133,7 @@ def codex_tool_args(cfg: Config) -> list[str]:
     웹은 설정 키 `-c web_search=live` — `--search`는 대화형 CLI 옵션이라 `codex exec`가 받지 않는다(실기 확인 2026-09-17:
     "unexpected argument '--search'"). 키를 모르는 버전이면 --strict-config가 아니라서 무시되고 검색만 안 된다(실패하지 않음).
     행동을 기록하려면 이벤트가 필요하므로 도구가 켜져 있을 때만 --json."""
-    args = ["--sandbox", "workspace-write" if cfg.tools else "read-only", "-C", str(cwd_for(cfg))]
+    args = ["--sandbox", "workspace-write" if (cfg.tools and not cfg.readonly) else "read-only", "-C", str(cwd_for(cfg))]
     if cfg.web_search:
         args += ["-c", "web_search=live"]
     if cfg.tools or cfg.web_search:
@@ -140,9 +141,43 @@ def codex_tool_args(cfg: Config) -> list[str]:
     return args
 
 
-def _tool_input_text(name: str | None, inp) -> str:
+
+_SHELL_WRAPPER_RE = re.compile(r'^"?[^"\n]*?(?:powershell|pwsh)(?:\.exe)?"?\s+(?:-NoProfile\s+)?(?:-NonInteractive\s+)?-Command\s+', re.I)
+_SHELL_WRAPPER2_RE = re.compile(r'^"?[^"\n]*?(?:bash|sh|cmd)(?:\.exe)?"?\s+(?:-l?c|/c)\s+', re.I)
+
+
+def _tidy_command(cmd: str, workspace: str | None = None) -> str:
+    """기록용 명령 정리: 셸 래퍼("...powershell.exe" -Command '...')를 벗기고 앞의 `cd <workspace> &&` 를 지운다 (실기 출력 기준)."""
+    s = (cmd or "").strip()
+    for rx in (_SHELL_WRAPPER_RE, _SHELL_WRAPPER2_RE):
+        m = rx.match(s)
+        if m:
+            s = s[m.end():].strip()
+            if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+                s = s[1:-1]
+            break
+    if workspace:
+        s = re.sub(r'^cd\s+["\']?' + re.escape(workspace.rstrip("\\/")) + r'["\']?\s*(?:&&|;)\s*', "", s, flags=re.I)
+    return s.strip()[:300]
+
+
+def _rel(path: str, workspace: str | None) -> str:
+    """workspace 안의 절대 경로는 상대 경로로 (기록이 짧고 어느 PC에서 봐도 같게)."""
+    if workspace and os.path.isabs(path) and os.path.normcase(path).startswith(os.path.normcase(str(workspace))):
+        try:
+            return os.path.relpath(path, workspace)
+        except ValueError:
+            pass
+    return path
+
+def _tool_input_text(name: str | None, inp, workspace: str | None = None) -> str:
     inp = inp if isinstance(inp, dict) else {}
-    for k in ("command", "file_path", "query", "url", "pattern", "path", "prompt"):
+    if inp.get("command"):
+        return _tidy_command(str(inp["command"]), workspace)
+    for k in ("file_path", "path"):
+        if inp.get(k):
+            return _rel(str(inp[k]), workspace)[:300]
+    for k in ("query", "url", "pattern", "prompt"):
         if inp.get(k):
             return str(inp[k])[:300]
     return json.dumps(inp, ensure_ascii=False)[:300]
@@ -160,10 +195,11 @@ class ClaudeEventParser:
     """claude -p stream-json 이벤트에서 도구 사용(tool_use)과 결과(tool_result)를 모아 actions 목록으로.
     각 항목 {"tool", "input", "output", "error"}. 같은 tool_use id가 반복돼도 한 번만 센다."""
 
-    def __init__(self) -> None:
+    def __init__(self, workspace: str | None = None) -> None:
         self.actions: list[dict] = []
         self._pending: dict[str, dict] = {}
         self._seen: set[str] = set()
+        self.workspace = workspace
 
     def feed(self, obj: dict) -> None:
         t = obj.get("type")
@@ -177,7 +213,7 @@ class ClaudeEventParser:
                     tid = str(b.get("id") or "")
                     if tid and tid in self._seen:
                         continue
-                    a = {"tool": str(b.get("name") or "?"), "input": _tool_input_text(b.get("name"), b.get("input")),
+                    a = {"tool": str(b.get("name") or "?"), "input": _tool_input_text(b.get("name"), b.get("input"), self.workspace),
                          "output": "", "error": False}
                     self.actions.append(a)
                     if tid:
@@ -192,9 +228,11 @@ class ClaudeEventParser:
                         a["error"] = bool(b.get("is_error"))
 
 
-def parse_codex_events(stdout: str) -> tuple[list[dict], dict | None, str]:
+def parse_codex_events(stdout: str, workspace: str | None = None) -> tuple[list[dict], dict | None, str]:
     """codex exec --json JSONL에서 (actions, usage{in,out,total}|None, 마지막 agent_message 텍스트).
-    item 종류 이름은 버전마다 다를 수 있어 부분 일치로 본다(command/search/file·patch)."""
+    실기 확인(0.146.1): item.started/item.completed 쌍, item.type = command_execution{command, aggregated_output, exit_code, status}
+    | web_search{query, action{type, query}} | file_change{changes[{path, kind}], status} | agent_message{text} | reasoning;
+    turn.completed{usage{input_tokens, cached_input_tokens, output_tokens}}. item.completed만 센다. 이름은 부분 일치로 본다."""
     actions: list[dict] = []
     usage: dict | None = None
     last_text = ""
@@ -212,14 +250,22 @@ def parse_codex_events(stdout: str) -> tuple[list[dict], dict | None, str]:
         if t == "item.completed":
             if "command" in k:
                 rc = it.get("exit_code")
+                try:
+                    rc = int(rc) if rc is not None and str(rc).strip() not in ("", "None") else None
+                except (TypeError, ValueError):
+                    rc = None
                 out = it.get("aggregated_output") or it.get("output") or ""
-                actions.append({"tool": "Bash", "input": str(it.get("command") or "")[:300],
-                                "output": str(out)[:MAX_ACTION_OUTPUT], "error": rc not in (None, 0)})
+                actions.append({"tool": "Bash", "input": _tidy_command(str(it.get("command") or ""), workspace),
+                                "output": str(out)[:MAX_ACTION_OUTPUT],
+                                "error": (rc is not None and rc != 0) or it.get("status") == "failed"})
             elif "search" in k:
-                actions.append({"tool": "WebSearch", "input": str(it.get("query") or "")[:300], "output": "", "error": False})
+                act = it.get("action") if isinstance(it.get("action"), dict) else {}
+                q = it.get("query") or act.get("query") or ""
+                actions.append({"tool": "WebSearch", "input": str(q)[:300], "output": "", "error": False})
             elif "file" in k or "patch" in k:
                 changes = it.get("changes") or it.get("files") or []
-                names = [str(c.get("path") or c) if isinstance(c, dict) else str(c) for c in changes] if isinstance(changes, list) else [str(changes)]
+                names = [_rel(str(c.get("path") or c), workspace) if isinstance(c, dict) else str(c) for c in changes] \
+                    if isinstance(changes, list) else [str(changes)]
                 actions.append({"tool": "Edit", "input": ", ".join(names)[:300], "output": "", "error": False})
             elif k == "agent_message":
                 last_text = str(it.get("text") or "")
@@ -265,7 +311,7 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
 
     acc: list[str] = []
     result_obj: dict | None = None
-    parser = ClaudeEventParser()  # 도구 사용 기록
+    parser = ClaudeEventParser(cfg.workspace or None)  # 도구 사용 기록
 
     def on_line(line: str) -> None:
         nonlocal result_obj
@@ -363,7 +409,7 @@ def call_codex(cfg: Config, prompt: str, stage: str,
                 msg = "API 오류: " + m.group(1).replace('\\"', '"')[:400]
         raise CLIError("codex", stage, msg, rc, err or out)
     if not text and (cfg.tools or cfg.web_search):
-        text = parse_codex_events(out)[2]  # --json이면 마지막 agent_message로 보완
+        text = parse_codex_events(out, cfg.workspace or None)[2]  # --json이면 마지막 agent_message로 보완
     if not text:
         raise CLIError("codex", stage, "마지막 메시지 파일이 비어 있음", rc, err or out)
     # codex exec는 시작 시 "model: ...", "reasoning effort: ..." 헤더를 찍는다(stderr). 실제 적용값 확인용.
@@ -377,7 +423,7 @@ def call_codex(cfg: Config, prompt: str, stage: str,
             "resolve_note": note, "stdout_tail": out[-400:],
             "usage": {"total": int(m_tok.group(1).replace(",", ""))} if m_tok else None}
     if cfg.tools or cfg.web_search:
-        actions, usage_json, _ = parse_codex_events(out)
+        actions, usage_json, _ = parse_codex_events(out, cfg.workspace or None)
         meta["actions"] = actions
         if usage_json:
             meta["usage"] = usage_json  # turn.completed의 입력/출력 토큰

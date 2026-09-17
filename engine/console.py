@@ -113,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--compact-chars", type=int, default=Config.compact_chars,
                     help="대화 기록이 이 글자 수를 넘으면 오래된 단계를 요약해 전달 (기본 60000, 0=끄기)")
     ap.add_argument("--no-web", action="store_true", help="웹 검색·페이지 읽기 끄기 (기본 켜짐: Claude WebSearch/WebFetch, Codex --search)")
+    ap.add_argument("--web-scope", choices=list(WEB_SCOPES), default=Config.web_scope,
+                    help="웹 검색을 쓰는 단계: initial_eval(최초 답변+평가, 기본) | initial(최초 답변만) | all(전체 단계)")
     ap.add_argument("--no-tools", action="store_true",
                     help="파일·명령 도구 끄기 (기본 켜짐: 라운드용 workspace\\ 안에서 읽기/쓰기와 허용 목록 명령만, 행동은 기록에 남고 단계마다 git 커밋)")
     ap.add_argument("--check", action="store_true", help="두 CLI가 응답하는지만 확인")
@@ -129,7 +131,8 @@ def main(argv: list[str] | None = None) -> int:
 
     cfg = Config(claude_model=a.claude_model or None, claude_effort=a.claude_effort or None,
                  codex_model=a.codex_model or None, codex_effort=a.codex_effort or None, timeout=a.timeout,
-                 run_code=a.run_code, compact_chars=a.compact_chars, web_search=not a.no_web, tools=not a.no_tools)
+                 run_code=a.run_code, compact_chars=a.compact_chars, web_search=not a.no_web, tools=not a.no_tools,
+                 web_scope=a.web_scope)
     try:
         cfg.claude_exe = find_claude()
         cfg.codex_exe = find_codex()

@@ -36,6 +36,7 @@ DEFAULT_SETTINGS = {
     "timeout": 900, "mode": "general", "stage_count": D.DEFAULT_STAGE_COUNT, "rounds": 1, "early_stop": True,
     "pause_each": False, "autosave": True, "beep": True, "run_code": False, "evaluate": True, "eval_revise": True,
     "compact_chars": 60000, "web_search": True, "tools": True,   # 사용자 지정(2026-09-17): 기본 켜짐, 사이드바에서 끔
+    "web_scope": "initial_eval",
     # 순서: first=먼저 답하는 AI, final_who=최종 정리 AI("same"=먼저 답한 AI), use_custom=표로 직접 편집
     "first": "claude", "final_who": "same", "use_custom": False,
     "custom_plan": [["claude", "initial"], ["gpt", "review"], ["claude", "rebuttal"], ["gpt", "recheck"], ["claude", "final"]],
@@ -496,6 +497,12 @@ with st.sidebar:
     web_search = st.checkbox("🌐 웹 검색 허용 (실시간 확인)", value=bool(s.get("web_search", True)), disabled=busy,
                              help="Claude는 WebSearch/WebFetch, Codex는 web_search=live. 검색한 사실엔 출처 URL을 적게 하고 검색 기록은 대화에 남습니다. "
                                   "단계마다 검색이 반복될 수 있어 느려지고 사용량이 늡니다.")
+    scope_keys = list(D.WEB_SCOPES)
+    web_scope = st.selectbox("검색 범위", scope_keys,
+                             index=scope_keys.index(s.get("web_scope")) if s.get("web_scope") in scope_keys else 0,
+                             format_func=lambda k: D.WEB_SCOPES[k], disabled=busy or not web_search,
+                             help="최초 답변이 검색한 결과는 [프로그램 기록]으로 모든 단계에 남습니다. 검토·반박은 그걸 재사용하고 평가자만 다시 확인하면 "
+                                  "검색 횟수와 토큰이 절반 이하로 줍니다. '전체 단계'는 단계마다 검색 (오늘 실측: 4단계 11분, 토큰 100만+).")
     tools = st.checkbox("🛠 파일·명령 허용 (대화별 workspace)", value=bool(s.get("tools", True)), disabled=busy,
                         help="workspace\\<대화>\\ 안에서 파일 읽기/쓰기와 허용 목록 명령(python·pytest·pip·git·ls 등)만 허용. 허용 목록 밖은 거부. "
                              "실행한 명령·결과·파일 변경은 대화 기록에 남고 단계마다 git 커밋됩니다. 모델이 쓴 코드가 이 PC에서 그대로 도니 믿을 수 있는 작업에서만.")
@@ -616,7 +623,7 @@ with st.sidebar:
         claude_model=None if claude_model.startswith("(") else claude_model,
         claude_effort=None if claude_effort.startswith("(") else claude_effort,
         codex_model=codex_model, codex_effort=codex_effort, timeout=timeout, run_code=run_code,
-        compact_chars=compact_chars, web_search=web_search, tools=tools,
+        compact_chars=compact_chars, web_search=web_search, tools=tools, web_scope=web_scope,
     )
     rx_model, rx_effort, rx_note = D.resolve_codex(CFG, codex_models)
     st.caption("현재 설정 → " + (
@@ -630,7 +637,7 @@ with st.sidebar:
                     "timeout": timeout, "mode": mode, "stage_count": stage_count, "rounds": rounds, "early_stop": early_stop,
                     "pause_each": pause_each, "autosave": autosave, "beep": do_beep, "run_code": run_code,
                     "evaluate": evaluate, "eval_revise": eval_revise, "compact_chars": compact_chars,
-                    "web_search": web_search, "tools": tools,
+                    "web_search": web_search, "tools": tools, "web_scope": web_scope,
                     "first": first_val, "final_who": final_sel, "use_custom": use_custom,
                     "custom_plan": [list(x) for x in custom_steps] if (use_custom and custom_steps) else s["custom_plan"]}
     if new_settings != ss.settings:

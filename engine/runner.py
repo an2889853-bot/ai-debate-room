@@ -45,16 +45,19 @@ def execute_stage(question: str, attachments: list[dict], history: list[dict], s
     src, issues = open_issues(history) if stage["kind"] in RESPOND_KINDS else (None, [])
     comp = compact_history(question, history, attachments, cfg, compaction)  # 기록이 길면 앞부분을 요약(라운드 캐시)
     prompt = build_prompt(question, history, stage, plan_len, prior, attachments, issues, src, comp)
-    rules = system_rules(mode, cfg.tools, cfg.web_search)
+    # 이 단계의 도구 범위: 웹은 web_scope에 따라(최초 답변의 검색 결과는 기록으로 남아 뒤 단계가 재사용), 평가자는 읽기 전용
+    web_on = bool(cfg.web_search) and web_allowed(cfg.web_scope, stage["kind"])
+    stage_cfg = dataclasses.replace(cfg, web_search=web_on, readonly=bool(cfg.readonly) or stage["kind"] == "evaluate")
+    rules = system_rules(mode, cfg.tools, web_on, web_reuse=bool(cfg.web_search) and not web_on)
     t0 = time.time()
     images = image_attachments(attachments)  # 매 호출이 독립 세션이므로 이미지도 매 단계 다시 전달
     contract: dict | None = None
     retries = 0
     while True:
         if stage["who"] == "claude":
-            content, meta = call_claude(cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images)
+            content, meta = call_claude(stage_cfg, rules, prompt, stage_name, on_delta, on_tick, cancel, images)
         else:
-            content, meta = call_codex(cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images)
+            content, meta = call_codex(stage_cfg, rules + "\n" + prompt, stage_name, on_tick, cancel, images)
         if not issues:
             break
         contract = check_contract(issues, content)

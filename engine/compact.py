@@ -67,7 +67,8 @@ def summarize_entries(entries: list[dict], cfg: Config) -> tuple[str, str]:
                         + ("\n" + render_evidence(h) if h.get("evidence") else "") for h in entries)
     try:
         # 요약엔 깊은 추론이 필요 없다 → effort를 낮춰 빠르고 싸게 (모델은 설정 그대로)
-        summary, _ = call_claude(dataclasses.replace(cfg, claude_effort="low"), SUMMARY_RULES,
+        # 요약자는 도구·웹 없이 (요약만 하면 되고, 도구가 열리면 요약 중에 명령을 돌릴 수 있다)
+        summary, _ = call_claude(dataclasses.replace(cfg, claude_effort="low", tools=False, web_search=False), SUMMARY_RULES,
                                  "=== 요약할 단계들 ===\n" + text, "요약")
         if summary.strip():
             return summary.strip(), "claude"

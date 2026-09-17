@@ -52,11 +52,11 @@ def test_summary_uses_low_effort(cli, monkeypatch):
     orig = f.claude
 
     def spy(cfg, *a, **k):
-        seen["effort"] = cfg.claude_effort
+        seen.update(effort=cfg.claude_effort, tools=cfg.tools, web=cfg.web_search)
         return orig(cfg, *a, **k)
     patch_all(monkeypatch, "call_claude", spy)
-    D.summarize_entries(HIST[:2], D.Config(claude_effort="xhigh"))
-    assert seen["effort"] == "low"
+    D.summarize_entries(HIST[:2], D.Config(claude_effort="xhigh", tools=True, web_search=True))
+    assert seen == {"effort": "low", "tools": False, "web": False}   # 요약자는 도구·웹 없이
 
 
 def test_summarize_falls_back_when_claude_fails(monkeypatch):

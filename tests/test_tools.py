@@ -27,6 +27,24 @@ def test_claude_tool_args():
     assert "dangerously" not in " ".join(both)
 
 
+def test_readonly_tools_for_evaluator():
+    """평가자: 읽기·실행·검색은 되지만 Edit/Write 없음, acceptEdits 없음, Codex는 read-only."""
+    ro = D.claude_tool_args(D.Config(tools=True, web_search=True, readonly=True))
+    assert "Edit" not in ro[1].split(",") and "Write" not in ro[1].split(",") and "Bash" in ro[1].split(",")
+    assert "Edit" not in ro[3].split() and "Write" not in ro[3].split() and "Read" in ro[3].split() and "WebSearch" in ro[3].split()
+    assert "--permission-mode" not in ro
+    assert D.codex_tool_args(D.Config(tools=True, readonly=True))[:2] == ["--sandbox", "read-only"]
+
+
+def test_web_allowed_scopes():
+    for kind in ("initial", "review", "rebuttal", "recheck", "final", "evaluate"):
+        assert D.web_allowed("all", kind)
+    assert D.web_allowed("initial", "initial") and not D.web_allowed("initial", "evaluate") and not D.web_allowed("initial", "review")
+    assert D.web_allowed("initial_eval", "initial") and D.web_allowed("initial_eval", "evaluate") and not D.web_allowed("initial_eval", "final")
+    assert D.web_allowed("???", "review")   # 모르는 값은 전체 허용 (안전 쪽이 아니라 기능 쪽 — 설정 파일 손상 시 검색이 조용히 꺼지지 않게)
+    assert list(D.WEB_SCOPES) == ["initial_eval", "initial", "all"]
+
+
 def test_codex_tool_args(tmp_path):
     off = D.codex_tool_args(D.Config())
     assert off[:2] == ["--sandbox", "read-only"] and off[off.index("-C") + 1] == str(D.SANDBOX)
@@ -78,6 +96,42 @@ def test_claude_event_parser_collects_tool_use_and_results():
         ("Bash", "rm -rf /", "permission denied", True)]                            # 중복 id(tu1)는 한 번만
 
 
+def test_tidy_command_and_relative_paths():
+    ws = r"C:\Users\LG\ai-debate-room\workspace\20260917_093828_프로브"
+    # 실기 출력 그대로: Claude는 cd "<ws>" && …, Codex는 powershell.exe -Command '…'
+    assert D._tidy_command(f'cd "{ws}" && python hello.py', ws) == "python hello.py"
+    assert D._tidy_command("\"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -Command 'python hello2.py'", ws) == "python hello2.py"
+    assert D._tidy_command('"C:\\x\\powershell.exe" -Command "Get-Content -LiteralPath .\\hello2.py; py hello2.py"') == "Get-Content -LiteralPath .\\hello2.py; py hello2.py"
+    assert D._tidy_command("bash -lc 'ls -la'") == "ls -la"
+    assert D._tidy_command("python plain.py") == "python plain.py"
+    assert D._rel(ws + "\\hello.py", ws) == "hello.py" and D._rel(r"C:\other\a.py", ws) == r"C:\other\a.py" and D._rel("rel.py", ws) == "rel.py"
+    p = D.ClaudeEventParser(ws)
+    p.feed({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "id": "a", "name": "Write", "input": {"file_path": ws + "\\hello.py", "content": "..."}},
+        {"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": f'cd "{ws}" && python hello.py'}}]}})
+    assert [(a["tool"], a["input"]) for a in p.actions] == [("Write", "hello.py"), ("Bash", "python hello.py")]
+
+
+CODEX_REAL = "\n".join(json.dumps(o, ensure_ascii=False) for o in [   # 2026-09-17 실기 출력 축약
+    {"type": "item.started", "item": {"id": "i1", "type": "file_change", "changes": [{"path": "C:\\ws\\hello2.py", "kind": "add"}], "status": "in_progress"}},
+    {"type": "item.completed", "item": {"id": "i1", "type": "file_change", "changes": [{"path": "C:\\ws\\hello2.py", "kind": "add"}], "status": "completed"}},
+    {"type": "item.started", "item": {"id": "i2", "type": "command_execution", "command": "\"C:\\W\\powershell.exe\" -Command 'python hello2.py'", "aggregated_output": "", "exit_code": None, "status": "in_progress"}},
+    {"type": "item.completed", "item": {"id": "i2", "type": "command_execution", "command": "\"C:\\W\\powershell.exe\" -Command 'python hello2.py'", "aggregated_output": "did not find executable", "exit_code": "1", "status": "failed"}},
+    {"type": "item.started", "item": {"id": "i3", "type": "web_search", "query": "", "action": {"type": "other"}}},
+    {"type": "item.completed", "item": {"id": "i3", "type": "web_search", "query": "", "action": {"type": "search", "query": "latest python"}}},
+    {"type": "item.completed", "item": {"id": "i4", "type": "command_execution", "command": "\"C:\\W\\powershell.exe\" -Command 'Get-Date'", "aggregated_output": "2026-09-17", "exit_code": 0, "status": "completed"}},
+    {"type": "item.completed", "item": {"id": "i5", "type": "agent_message", "text": "끝"}},
+    {"type": "turn.completed", "usage": {"input_tokens": 89043, "cached_input_tokens": 78336, "output_tokens": 868}},
+])
+
+
+def test_parse_codex_events_real_format():
+    actions, usage, last = D.parse_codex_events(CODEX_REAL, "C:\\ws")
+    assert [(a["tool"], a["input"], a["error"]) for a in actions] == [
+        ("Edit", "hello2.py", False), ("Bash", "python hello2.py", True), ("WebSearch", "latest python", False), ("Bash", "Get-Date", False)]
+    assert usage == {"in": 89043, "out": 868, "total": 89911} and last == "끝"
+
+
 CODEX_JSONL = "\n".join(json.dumps(o, ensure_ascii=False) for o in [
     {"type": "thread.started", "thread_id": "t1"},
     {"type": "item.completed", "item": {"id": "i1", "type": "reasoning", "text": "..."}},
@@ -112,6 +166,34 @@ def test_system_rules_variants():
     web_only = D.system_rules("general", web=True)
     assert "파일 읽기·명령 실행은 허용되지 않습니다" in web_only and "웹 검색·페이지 읽기가 허용" in web_only
     assert "웹 검색은 허용되지 않습니다" in D.system_rules("general", tools=True)
+    reuse = D.system_rules("general", tools=False, web=False, web_reuse=True)
+    assert "이번 단계는 웹 검색이 꺼져 있습니다" in reuse and "검색 결과(출처 URL 포함)를 근거로" in reuse and "어떤 도구도" not in reuse
+
+
+def test_execute_stage_applies_web_scope_and_evaluator_readonly(cli, monkeypatch):
+    seen = []
+    f = cli(["답"])
+    orig = f.claude
+
+    def spy(cfg, system_prompt, prompt, stage, *a, **kw):
+        seen.append((stage, cfg.web_search, cfg.readonly, cfg.tools, "웹 검색이 꺼져" in system_prompt))
+        return orig(cfg, system_prompt, prompt, stage, *a, **kw)
+    patch_all(monkeypatch, "call_claude", spy)
+    cfg = D.Config(tools=True, web_search=True, web_scope="initial_eval")
+    plan = D.plan_stages(1, "general", "claude", "claude", None, 5, evaluate=True)   # 전부 claude가 쓰도록 final_who=claude
+    plan = [dict(s, who="claude") for s in plan]
+    for s in plan:
+        D.execute_stage("q", [], [], s, cfg, plan_len=len(plan))
+    by_kind = {stage.split(" · ")[1]: (web, ro, tools, reuse) for stage, web, ro, tools, reuse in seen}
+    assert by_kind["Initial"] == (True, False, True, False)
+    assert by_kind["Review"] == (False, False, True, True) and by_kind["FINAL"] == (False, False, True, True)
+    assert by_kind["Eval"] == (True, True, True, False)                       # 평가자: 웹은 되고 쓰기는 금지
+    seen.clear()
+    D.execute_stage("q", [], [], plan[0], D.Config(tools=True, web_search=False), plan_len=1)
+    assert seen[0][1] is False and seen[0][4] is False                        # 웹을 아예 껐으면 '재사용' 문구도 없다
+    seen.clear()
+    D.execute_stage("q", [], [], plan[1], D.Config(web_search=True, web_scope="all"), plan_len=1)
+    assert seen[0][1] is True
 
 
 # ---- 기록 블록 -------------------------------------------------------------------

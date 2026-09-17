@@ -38,6 +38,12 @@ TOOL_ALLOW_CMDS = ["python", "python3", "python3.14", "py", "pytest", "pip", "gi
 CLAUDE_FILE_TOOLS = ["Read", "Glob", "Grep", "Edit", "Write", "Bash"]
 CLAUDE_WEB_TOOLS = ["WebSearch", "WebFetch"]
 MAX_ACTION_OUTPUT = 1200               # 기록에 남기는 도구 결과 상한(글자)
+WEB_SCOPES = {"initial_eval": "최초 답변 + 평가", "initial": "최초 답변만", "all": "전체 단계"}
+
+
+def web_allowed(scope: str, kind: str) -> bool:
+    """이 단계에서 웹 검색을 쓰는가. 최초 답변의 검색 결과는 [프로그램 기록]으로 모든 단계에 남으므로 기본은 최초 + 평가만."""
+    return {"all": True, "initial": kind == "initial", "initial_eval": kind in ("initial", "evaluate")}.get(scope, True)
 
 
 # ----------------------------------------------------------------------------
@@ -58,6 +64,8 @@ class Config:
     web_search: bool = False              # True면 웹 검색·페이지 읽기 허용 (Claude WebSearch/WebFetch, Codex --search)
     tools: bool = False                   # True면 workspace 안에서 파일 읽기/쓰기와 허용 목록 명령 실행 허용 (행동은 기록에 남음)
     workspace: str = ""                   # tools일 때 CLI 작업 폴더 (비어 있으면 sandbox\)
+    web_scope: str = "initial_eval"       # 웹 검색을 쓰는 단계: all(전체) | initial(최초 답변만) | initial_eval(최초 답변 + 평가)
+    readonly: bool = False                # True면 도구는 읽기·실행·검색만 (Edit/Write 금지, Codex read-only) — 평가자 단계가 씀
     claude_exe: str = ""
     codex_exe: str = ""
 

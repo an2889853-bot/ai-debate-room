@@ -91,6 +91,7 @@ def test_sidebar_defaults_render(isolated):
     assert eval_on and len(caps) == 1 and caps[0].count("→") == r.value - 1 + 1 and caps[0].endswith("·Eval")
     compact = next(n for n in at.sidebar.number_input if n.label.startswith("긴 토론 요약 기준"))
     assert compact.value == 60, "기본 60천 자"
+    assert select(at, "검색 범위").value == "initial_eval", "기본: 최초 답변 + 평가"
 
 
 def test_three_stage_round_end_to_end(isolated, fake_stages):

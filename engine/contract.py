@@ -35,9 +35,10 @@ COMMON_RULES_HEAD = (
 TOOL_RULE_OFF = "- 파일 읽기, 명령 실행, 웹 검색 등 어떤 도구도 사용하지 말고 오직 텍스트로만 답하십시오.\n"
 
 
-def tool_rules(tools: bool = False, web: bool = False) -> str:
-    """도구 허용 여부에 맞는 규칙 줄. 허용하면 '무엇을 할 수 있고, 프로그램이 기록에 남긴다'를 알려 결과를 꾸미지 않게 한다."""
-    if not tools and not web:
+def tool_rules(tools: bool = False, web: bool = False, web_reuse: bool = False) -> str:
+    """도구 허용 여부에 맞는 규칙 줄. 허용하면 '무엇을 할 수 있고, 프로그램이 기록에 남긴다'를 알려 결과를 꾸미지 않게 한다.
+    web_reuse: 이 단계는 검색이 꺼졌지만 앞 단계의 검색 기록이 있으니 그것을 재사용하라."""
+    if not tools and not web and not web_reuse:
         return TOOL_RULE_OFF
     lines = []
     if tools:
@@ -49,6 +50,9 @@ def tool_rules(tools: bool = False, web: bool = False) -> str:
     if web:
         lines.append("- 웹 검색·페이지 읽기가 허용됩니다. 최신 사실·수치·뉴스는 검색으로 확인하고, 검색으로 얻은 사실엔 출처 URL과 "
                      "확인 시각을 적으십시오. 검색 기록도 프로그램이 기록에 남깁니다.\n")
+    elif web_reuse:
+        lines.append("- 이번 단계는 웹 검색이 꺼져 있습니다. 대화 기록의 '[프로그램 기록 ...]' 블록에 남은 검색 결과(출처 URL 포함)를 근거로 쓰고, "
+                     "추가 확인이 필요한 사실은 '확인 필요'라고 표시하십시오.\n")
     else:
         lines.append("- 웹 검색은 허용되지 않습니다. 모르는 최신 사실은 모른다고 하십시오.\n")
     return "".join(lines)

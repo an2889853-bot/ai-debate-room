@@ -20,7 +20,7 @@ from __future__ import annotations
 import sys
 
 from engine.console import *  # noqa: F401,F403  (console이 앞선 모듈을 전부 star-import 하므로 공개 이름이 모두 들어온다)
-from engine.cli import _popen_stream, _run_quiet  # noqa: F401  (밑줄 이름은 star-import에 안 실리므로 명시)
+from engine.cli import _popen_stream, _run_quiet, _tidy_command, _rel  # noqa: F401  (밑줄 이름은 star-import에 안 실리므로 명시)
 from engine.evidence import _run_python  # noqa: F401
 from engine.attachments import _find_tool, _decode_text, _pdf_pages_to_images, _pdf_to_text  # noqa: F401
 from engine.store import _round_lines, _ILLEGAL  # noqa: F401
