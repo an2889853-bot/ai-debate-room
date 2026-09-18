@@ -13,6 +13,7 @@ Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반�
 | 코드가 지금 어떻게 동작하나 (CLI 호출, 단계 계획, 프롬프트, 첨부, 저장, UI 스레드, 테스트) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | 왜 이렇게 했나, 언제 무엇이 바뀌었나, 사고 기록 | [docs/DECISIONS.md](docs/DECISIONS.md) (시간순, 맨 아래가 최신) |
 | 새 PC 설치, 다른 컴퓨터에서 접속, 문제 해결 표 | [docs/SETUP.md](docs/SETUP.md) |
+| 처음 받는 사람에게 보내는 설치 가이드 (ZIP → setup.cmd → launch_ui.cmd) | [docs/GUIDE.md](docs/GUIDE.md) |
 | CLI 옵션 원문 | `docs/claude-help.txt`, `codex-help.txt`, `codex-exec-help.txt`, `codex-login-help.txt` |
 | Codex 모델 카탈로그 캐시 | `docs/codex-models.json` |
 

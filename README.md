@@ -37,7 +37,7 @@ A/B는 Claude·GPT 중 고를 수 있고, 5단계(검토 → 반박 → 재검�
 
 ## 5분 설치
 
-**가장 쉬운 길**: 초록 **Code → Download ZIP**으로 받아 압축을 풀고, 폴더 안의 **`setup.cmd`를 더블클릭**하세요. 파이썬·패키지·두 CLI를 설치하고 로그인 창(각자 구독 계정)까지 띄운 뒤 점검합니다. 끝나면 `launch_ui.cmd` 더블클릭. git이 없어도 됩니다.
+**처음 받는 분은 [docs/GUIDE.md](docs/GUIDE.md)만 따라 하세요** — ZIP 받기 → `setup.cmd` 더블클릭(파이썬·패키지·두 CLI 설치 + 각자 구독 계정 로그인 창 + 점검) → `launch_ui.cmd` 더블클릭. git이 없어도 됩니다.
 
 직접 하려면:
 ```powershell
@@ -83,6 +83,7 @@ New-Item -ItemType Directory -Force "$HOME\.streamlit" | Out-Null
 
 | 문서 | 내용 |
 |---|---|
+| [docs/GUIDE.md](docs/GUIDE.md) | **처음 받는 분용 설치 가이드** — ZIP → setup.cmd → launch_ui.cmd, 막힐 때 표 |
 | [CLAUDE.md](CLAUDE.md) | 작업 지도 — 제약·규칙·현재 상태 (Claude Code / Codex로 개발할 때 자동으로 읽힘) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 코드가 어떻게 동작하나 (CLI 호출 플래그, 단계 계획, 반영 계약, 평가자, 도구·기록, 압축, 관측) |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 왜 이렇게 만들었나 — 날짜별 결정·사고·실측 데이터 |
