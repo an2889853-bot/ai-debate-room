@@ -82,8 +82,14 @@ if ($claudeCmd) {
     $status = (& $claudeCmd auth status --json 2>&1 | ForEach-Object { "" + $_ }) -join "`n"
     if ($status -match '"loggedIn"\s*:\s*true') { Write-Host "Claude 로그인 되어 있음" }
     else {
-        Write-Host "Claude 로그인 창을 엽니다 - 브라우저에서 Claude 구독 계정으로 로그인하세요..." -ForegroundColor Yellow
+        Write-Host "Claude 로그인 창을 엽니다 - 브라우저에서 Claude 구독 계정으로 로그인한 뒤 이 창으로 돌아오세요." -ForegroundColor Yellow
+        Write-Host "  * 'Login successful' 이 보이면 자동으로 다음 단계로 갑니다."
+        Write-Host "  * 'Paste code here if prompted >' 가 보이면 브라우저에 표시된 코드를 여기에 붙여넣고 Enter."
+        Write-Host "  * 이 창을 닫거나 Ctrl+C 를 누르면 설치가 중단됩니다 (그래도 setup.cmd 를 다시 실행하면 이어집니다)."
         & $claudeCmd auth login
+        $status = (& $claudeCmd auth status --json 2>&1 | ForEach-Object { "" + $_ }) -join "`n"
+        if ($status -match '"loggedIn"\s*:\s*true') { Write-Host "Claude 로그인 확인" -ForegroundColor Green }
+        else { $problems++; Fail "Claude 로그인이 확인되지 않았습니다. setup.cmd 를 다시 실행하면 로그인 창만 다시 뜹니다." }
     }
 } else { $problems++; Fail "Claude Code CLI를 찾지 못했습니다. 수동: PowerShell에서  irm https://claude.ai/install.ps1 | iex  실행 후  claude auth login" }
 
@@ -112,8 +118,11 @@ if (-not $codexCmd) {
 if ($codexCmd) {
     if ((Quiet $codexCmd @("login", "status")) -eq 0) { Write-Host "Codex 로그인 되어 있음" }
     else {
-        Write-Host "Codex 로그인 창을 엽니다 - 브라우저에서 ChatGPT 구독 계정으로 로그인하세요..." -ForegroundColor Yellow
+        Write-Host "Codex 로그인 창을 엽니다 - 브라우저에서 ChatGPT 구독 계정으로 로그인한 뒤 이 창으로 돌아오세요." -ForegroundColor Yellow
+        Write-Host "  * 브라우저에 완료 표시가 나오면 이 창은 자동으로 다음 단계로 갑니다. 창을 닫거나 Ctrl+C 를 누르지 마세요."
         & $codexCmd login
+        if ((Quiet $codexCmd @("login", "status")) -eq 0) { Write-Host "Codex 로그인 확인" -ForegroundColor Green }
+        else { $problems++; Fail "Codex 로그인이 확인되지 않았습니다. setup.cmd 를 다시 실행하면 로그인 창만 다시 뜹니다." }
     }
 } else { $problems++; Fail "Codex CLI를 찾지 못했습니다. 수동: winget install --id OpenAI.Codex  실행 후  codex login" }
 
