@@ -38,7 +38,7 @@ A/B는 Claude·GPT 중 고를 수 있고, 5단계(검토 → 반박 → 재검�
 ## 5분 설치
 
 ```powershell
-git clone https://github.com/<계정>/ai-debate-room.git
+git clone https://github.com/an2889853-bot/ai-debate-room.git
 cd ai-debate-room
 python3.14 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt

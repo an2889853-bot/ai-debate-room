@@ -5,6 +5,7 @@ Claude Code가 이 폴더에서 시작할 때 자동으로 읽는 **짧은 지�
 ## 무엇인가
 Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반박하며 하나의 답을 만드는 Streamlit 앱.
 구독 로그인된 **Claude Code CLI**와 **OpenAI Codex CLI**를 Python `subprocess`로 호출한다 (API 키 과금 없음). 코드는 `engine/`(엔진 패키지 12모듈) + `debate.py`(facade·콘솔 진입점) + `app.py`(UI).
+공개 저장소: https://github.com/an2889853-bot/ai-debate-room (2026-09-18부터, GitHub Desktop으로 push). 외부인용 소개는 `README.md`, 프롬프트만 쓰는 사람용은 `docs/PROMPTS.md`(`tools/export_prompts.py`로 재생성).
 
 ## 문서 지도
 | 알고 싶은 것 | 어디 |
@@ -26,7 +27,7 @@ Windows 11 로컬에서 Claude와 GPT가 한 채팅창에서 서로 검토·반�
 - `engine/`이나 `debate.py`를 고치면 8501 서버를 **재시작**한다 (import된 모듈이 옛것으로 남음). 8501 프로세스 종료 → `launch_ui.cmd`.
 - `engine/` 모듈은 의존 순서(config → attachments → cli → contract → plan → evidence → usage → prompt → compact → runner → store → console)대로 앞쪽만 참조한다. 테스트에서 대역은 반드시 `conftest.patch_all()`로 바꾼다(star-import 때문에 같은 이름이 여러 모듈에 있음).
 - `.cmd` 파일은 ASCII만 (cmd.exe가 CP949로 읽음).
-- 코드 수정 → `pytest`(112개, 약 9초) → 커밋. 테스트 대역(`conftest.FakeCLI`, `FakeStages`)은 실제 함수 시그니처를 따라가야 한다 — 인자를 추가하면 대역도 같이. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
+- 코드 수정 → `pytest`(112개, 약 9초) → 커밋 → `git push`(GitHub Desktop의 Push origin으로도 됨). 지시문을 고쳤으면 `tools\export_prompts.py`로 `docs/PROMPTS.md`도 재생성. 테스트 대역(`conftest.FakeCLI`, `FakeStages`)은 실제 함수 시그니처를 따라가야 한다 — 인자를 추가하면 대역도 같이. 결정·사고는 `docs/DECISIONS.md` 맨 아래에 날짜와 함께 추가하고, 동작이 바뀌면 `docs/ARCHITECTURE.md`를 같이 고친다. 이 파일엔 상태·규칙만 갱신한다.
 - 라운드 dict의 `stages`는 실행된 단계 목록, 단계 수는 `stage_count` (이름 충돌 주의).
 - 사이드바를 만지면 `ui_settings.json`이 저장된다. 이 파일을 직접 고칠 땐 서버를 끄고 한다.
 
