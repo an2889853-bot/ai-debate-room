@@ -32,8 +32,10 @@ def patch_all(monkeypatch, name: str, value) -> None:
 
 @pytest.fixture
 def keep_settings():
-    """사이드바를 조작하면 ui_settings.json이 저장되므로 테스트 전후로 원본을 보존한다."""
+    """사이드바를 조작하면 ui_settings.json이 저장되므로 테스트 전후로 원본을 보존하고,
+    테스트 중에는 빈 설정으로 두어 소유자의 개인 설정(예: 도구 켜짐)이 아니라 DEFAULT_SETTINGS로 돌게 한다."""
     backup = SETTINGS_PATH.read_bytes() if SETTINGS_PATH.exists() else None
+    SETTINGS_PATH.write_text("{}", encoding="utf-8")
     yield
     if backup is None:
         SETTINGS_PATH.unlink(missing_ok=True)
