@@ -94,7 +94,7 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 
 ## 2026-09-10 16:00 — 텍스트 없는 PDF → 쪽 이미지
 
-사용자가 "Microsoft Print to PDF"로 뽑은 지원서 PDF(8쪽 전부 JPEG, 글꼴 0개)를 올렸는데 추출 텍스트가 공백뿐. `load_attachments(name, data, image_dir)`가 PDF 텍스트 20자 미만이면 `_pdf_pages_to_images()`로 쪽을 PNG로(`pdftoppm -r 130`, 없으면 pypdf `page.images`) 최대 12쪽 이미지 첨부로 변환(이름 "파일명 (n/N쪽)", 첫 장 warning 안내). `_find_tool()`이 PATH 외 winget Poppler 폴더도 탐색(서버 프로세스 PATH에 poppler가 없을 수 있음). 검증: 8쪽 3.1s, Claude/Codex 모두 1쪽 섹션 정확히 판독. UI 이미지 4열. app.py·콘솔 모두 `load_attachments`.
+사용자가 "Microsoft Print to PDF"로 인쇄해 만든 PDF(8쪽 전부 JPEG, 글꼴 0개)를 올렸는데 추출 텍스트가 공백뿐. `load_attachments(name, data, image_dir)`가 PDF 텍스트 20자 미만이면 `_pdf_pages_to_images()`로 쪽을 PNG로(`pdftoppm -r 130`, 없으면 pypdf `page.images`) 최대 12쪽 이미지 첨부로 변환(이름 "파일명 (n/N쪽)", 첫 장 warning 안내). `_find_tool()`이 PATH 외 winget Poppler 폴더도 탐색(서버 프로세스 PATH에 poppler가 없을 수 있음). 검증: 8쪽 3.1s, Claude/Codex 모두 1쪽 섹션 정확히 판독. UI 이미지 4열. app.py·콘솔 모두 `load_attachments`.
 
 ## 2026-09-10 — 모델/effort 적용 검증
 
@@ -223,3 +223,9 @@ Claude = `fable` 별칭 + `xhigh`(별칭이 최신 Fable을 자동 추적, 당�
 **실기 2 — 실제 토론 "최근뉴스 정리해줘"(새 기본: 도구 켬, 검색 범위 최초+평가)**: 6단계 489초(전체 단계 검색이던 전날 2라운드 665초보다 27% 단축). GPT 최초 답변이 WebSearch 5회(223k 토큰), Claude 검토 `[지적 7]`(Bash `ls`/`git` 1회, exit 128 실패 — 쓸모없는 호출), GPT FINAL 7/7 반영, **Claude 평가 NEEDS_WORK**(`[지적 5]`, WebFetch 6회 중 3회 "unable to fetch"(yna·apnews 차단) + WebSearch, 145초, $1.14), GPT FINAL 2 5/5 반영, Claude Eval 2 **PASS**(Bash date + WebFetch/WebSearch 4회, 98초, $0.90). 반영 계약 12/12, 재요청 0, 재작성 루프 정상. 비용은 평가자 두 번이 절반 이상 — 평가자가 사실 확인에 열심인 건 좋으나 상한이 필요.
 **결정**: ① 단계당 도구 호출 권고 상한 `tool_budget`(8)·평가자 `eval_tool_budget`(5)을 규칙 문구로(이 CLI엔 `--max-turns`가 없고 `--max-budget-usd`는 구독에서 의미가 불명확해 안 씀). ② 웹 규칙에 "조회 실패 URL 재시도 금지". ③ 평가자 지시문에 "핵심 주장 5개 이내". ④ UI 도구 확장에 상한 입력.
 **검증**: 112개(add-dir 인자, 상한 문구·평가자 적용 spy, 평가자 지시문, UI 기본값). 실기 효과는 다음 실제 토론에서 평가 단계의 조회 횟수·시간으로 확인.
+
+## 2026-09-18 — 공유판 준비 (GitHub 공개)
+
+사용자가 외부에 써보라고 공유하길 원함 → GitHub 공개 저장소로. 준비: `README.md`(외부인용 — 무엇·요구사항·5분 설치·사용법·도구 경고·문서 지도), `LICENSE`(MIT), `docs/PROMPTS.md`(`tools/export_prompts.py`가 엔진 상수에서 자동 생성 — 코드 없이 프롬프트만 쓰려는 사람용), 문서의 개인 경로 일반화, 개인 언급 1건 정리.
+**기본값 결정**: 🌐·🛠 도구 토글을 **기본 꺼짐**으로 되돌림(UI·콘솔·엔진 모두). 이유: 모르는 사람이 받아 첫 실행에 "모델이 내 PC에서 명령을 돌린다"는 나쁜 놀라움이고, 하네스 원칙(사람이 켜는 결정)에도 맞다. 소유자의 개인 설정은 `ui_settings.json`(git 제외)에 켜진 값을 넣어 두어 그대로 유지. 콘솔 플래그는 `--web/--tools`(켜기)로 복귀.
+git 사용자 안내: 저장소는 이미 로컬 git으로 관리 중(커밋 15개), 브랜치를 `main`으로 바꾸고 GitHub 원격을 붙여 푸시. 개인 데이터(chats/, workspace/, runs/, ui_settings.json, tools/probe_out/)는 `.gitignore`로 제외돼 올라가지 않는다.
