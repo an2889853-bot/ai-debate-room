@@ -37,6 +37,9 @@ A/B는 Claude·GPT 중 고를 수 있고, 5단계(검토 → 반박 → 재검�
 
 ## 5분 설치
 
+**가장 쉬운 길**: 초록 **Code → Download ZIP**으로 받아 압축을 풀고, 폴더 안의 **`setup.cmd`를 더블클릭**하세요. 파이썬·패키지·두 CLI를 설치하고 로그인 창(각자 구독 계정)까지 띄운 뒤 점검합니다. 끝나면 `launch_ui.cmd` 더블클릭. git이 없어도 됩니다.
+
+직접 하려면:
 ```powershell
 git clone https://github.com/an2889853-bot/ai-debate-room.git
 cd ai-debate-room

@@ -50,6 +50,7 @@ ai-debate-room\
   debate.py               engine의 facade + 콘솔 진입점 (`import debate as D`, `python debate.py`)
   app.py                  Streamlit 채팅 UI
   launch_ui.cmd           바탕화면 바로가기용 런처 / start_ui.cmd  항상 새 서버
+  setup.cmd               원클릭 설치 (tools\setup.ps1 실행 — uv·파이썬·venv·패키지·두 CLI 설치·로그인·점검). .cmd는 ASCII만, .ps1은 UTF-8 BOM
   requirements.txt        실행 의존성 (고정 버전) / requirements-dev.txt  +pytest
   tests\                  conftest(픽스처·patch_all·가짜 단계·가짜 CLI), test_plan·test_contract·test_evidence·test_eval·test_usage·test_compact·test_tools·test_cycle3, test_app(AppTest 종단)
   tools\                  probe_tools.py — 도구 허용 실기 프로브 (pytest 아님, 원본 출력은 probe_out\ — git 제외)

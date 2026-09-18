@@ -6,7 +6,9 @@
 
 **가져갈 것**: 이 폴더를 통째로 복사하되 `.venv\`, `__pycache__\`, `chats\`(개인 기록, 원하면), `runs\`는 빼도 된다 (약 0.6MB). `engine\` 폴더(엔진 패키지)가 빠지면 `debate.py`가 import 오류를 낸다. git을 쓰면 `git clone`이 곧 이 목록이다. `sandbox\` 빈 폴더는 필요하다(CLI 호출 작업 폴더 — git에는 `.gitkeep`으로 들어 있음). `ui_settings.json`을 가져가면 사이드바 설정이 그대로 따라간다.
 
-**새 PC에서 (PowerShell)**:
+**원클릭**: 폴더 안 `setup.cmd`를 더블클릭 → `tools\setup.ps1`이 uv·파이썬 3.14·.venv·패키지·Streamlit 설정·Claude Code CLI·Codex CLI를 설치하고(이미 있으면 건너뜀) 로그인 안 된 CLI는 로그인 창을 띄운 뒤 `debate.py --check`로 점검합니다. 실행 정책은 `.cmd`가 `-ExecutionPolicy Bypass`로 우회하므로 바꿀 필요 없습니다.
+
+**직접 (PowerShell)**:
 ```powershell
 # 1) 두 CLI 설치 + 구독 계정 로그인
 irm https://claude.ai/install.ps1 | iex        # Claude Code CLI → ~\.local\bin\claude.exe
