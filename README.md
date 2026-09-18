@@ -62,6 +62,8 @@ New-Item -ItemType Directory -Force "$HOME\.streamlit" | Out-Null
 
 콘솔에서도 됩니다: `.venv\Scripts\python.exe debate.py "질문" --stages 5 --mode plc --file 회로.txt`
 
+옵션 하나하나의 뜻과 화면 표시(🧾 🔬 🧑‍⚖️ 🛠 …) 읽는 법, 상황별 추천 설정은 [docs/USAGE.md](docs/USAGE.md).
+
 ### 🛠 도구 켜기 (기본 꺼짐)
 
 사이드바 "🛠 도구" 확장에서:
@@ -84,6 +86,7 @@ New-Item -ItemType Directory -Force "$HOME\.streamlit" | Out-Null
 | 문서 | 내용 |
 |---|---|
 | [docs/GUIDE.md](docs/GUIDE.md) | **처음 받는 분용 설치 가이드** — ZIP → setup.cmd → launch_ui.cmd, 막힐 때 표 |
+| [docs/USAGE.md](docs/USAGE.md) | **사용 설명서** — 사이드바 옵션마다 기본값·특징, 화면 표시 읽는 법, 상황별 추천 설정 |
 | [CLAUDE.md](CLAUDE.md) | 작업 지도 — 제약·규칙·현재 상태 (Claude Code / Codex로 개발할 때 자동으로 읽힘) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 코드가 어떻게 동작하나 (CLI 호출 플래그, 단계 계획, 반영 계약, 평가자, 도구·기록, 압축, 관측) |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | 왜 이렇게 만들었나 — 날짜별 결정·사고·실측 데이터 |
