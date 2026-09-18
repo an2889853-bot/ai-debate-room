@@ -59,7 +59,8 @@ elseif (Have uv) {
     if ($rc -ne 0) { $problems++; Fail "가상환경 생성 실패 (종료 코드 $rc)" }
 }
 if (Test-Path $py) {
-    $rc = Run $py @("-m", "pip", "install", "-q", "--disable-pip-version-check", "-r", "requirements.txt")
+    Write-Host "패키지 설치 중... (streamlit 등 수십 MB, 1~5분. 아래에 진행 줄이 천천히 올라옵니다)" -ForegroundColor Yellow
+    $rc = Run $py @("-m", "pip", "install", "--disable-pip-version-check", "--progress-bar", "off", "-r", "requirements.txt")
     if ($rc -ne 0) { $problems++; Fail "패키지 설치 실패 (종료 코드 $rc) - 인터넷 연결을 확인하고 다시 실행하세요." } else { Write-Host "패키지 OK" }
 }
 
