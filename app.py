@@ -160,7 +160,8 @@ def used_models(e: dict) -> str:
     if e["who"] == "gpt":
         return f"model: {meta['model']} · effort: {meta.get('reasoning_effort') or '?'}" if meta.get("model") else ""
     models = [m for m in (meta.get("models") or []) if "haiku" not in m]  # haiku는 내부 보조용
-    return f"model: {', '.join(models)}" if models else ""
+    note = f" · {meta['resolve_note']}" if meta.get("resolve_note") else ""   # 예: fable 크레딧 필요 → opus로 대체
+    return (f"model: {', '.join(models)}" if models else "") + note
 
 
 def config_line(cfg: dict, mode: str, stage_count: int) -> str:

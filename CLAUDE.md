@@ -73,7 +73,7 @@ ai-debate-room\
 - **컨텍스트 압축**: 기록이 `compact_chars`(기본 60,000자)를 넘으면 마지막 2단계만 원문, 그 앞은 Claude(effort low)가 요약한 `[요약 · 이전 단계 n개]` 블록으로. 라운드 캐시(내용 해시 키), 실패 시 앞부분 잘라 붙임. 계약·조기 종료·평가 판정은 항상 원문으로.
 - **관측**: 단계 캡션에 토큰·API 환산 비용(Claude만 정확, GPT는 CLI가 안 찍어 `?`), 라운드 끝에 ⏱ 합계, 저장 dict `usage`. 전체 통계는 `debate.py --stats` 또는 사이드바 📊 (조기 종료율·계약 재요청·평가 PASS율까지).
 - **독립 평가자**: `evaluate`(기본 켬)면 FINAL 뒤에 최종 정리를 안 쓴 쪽 AI가 `[평가: PASS|NEEDS_WORK]` + `[지적 N]`으로 채점. NEEDS_WORK면 `FINAL 2` + `Eval 2`를 1회만 추가(`adjust_plan_after()` — 조기 종료도 여기서, UI·콘솔 공용). FINAL 2는 평가자 지적을 반영 계약으로 검사받는다. `final_of()`는 FINAL 2 우선.
-- 모델 정책: Claude `fable`+`xhigh`, Codex `auto`(카탈로그 최상위, 현재 gpt-5.6-sol)+`xhigh`(미지원이면 자동 하향).
+- 모델 정책: Claude `fable`+`xhigh`, Codex `auto`(카탈로그 최상위, 현재 gpt-5.6-sol)+`xhigh`(미지원이면 자동 하향). Claude 모델이 크레딧 필요(429 `credits_required`)로 거절되면 `CLAUDE_FALLBACK`(opus → sonnet)으로 자동 대체하고 `meta.resolve_note`에 표시.
 - UI: 단계는 daemon 스레드에서 돌고 fragment가 0.5초마다 그린다. 일시정지·한마디 개입·다시 생성·바로 FINAL·중단·이어서 진행. 도구는 전부 꺼져 있고 Codex는 read-only 샌드박스.
 - 저장: `chats\<시각>_<주제>.json/.md`, 설정 `ui_settings.json`. 첨부: 텍스트·PDF·이미지, 글자 없는 PDF는 쪽 이미지로.
 

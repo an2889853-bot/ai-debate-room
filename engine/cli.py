@@ -352,7 +352,7 @@ def _claude_image_message(prompt: str, images: list[dict]) -> str:
     return json.dumps({"type": "user", "message": {"role": "user", "content": content}}, ensure_ascii=False) + "\n"
 
 
-def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
+def _call_claude_once(cfg: Config, system_prompt: str, prompt: str, stage: str,
                 on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
                 cancel: threading.Event | None = None, images: list[dict] | None = None,
                 on_action: Callable[[list[dict]], None] | None = None) -> tuple[str, dict]:
@@ -428,12 +428,45 @@ def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
         except json.JSONDecodeError:
             raise CLIError("claude", stage, "JSON 출력 파싱 실패", rc, err + "\n--- stdout ---\n" + out[:2000]) from None
     if data.get("is_error") or data.get("subtype") != "success":
-        raise CLIError("claude", stage, f"응답 오류 subtype={data.get('subtype')}", rc, str(data.get("result", ""))[:2000])
+        result_text = str(data.get("result", ""))
+        if data.get("api_error_code") == "credits_required" or "requires usage credits" in result_text:
+            raise CreditsRequired("claude", stage, f"모델 {cfg.claude_model or '(기본)'}: 크레딧 필요", rc, result_text[:400])
+        raise CLIError("claude", stage, f"응답 오류 subtype={data.get('subtype')}", rc, result_text[:2000])
     meta = {"session_id": data.get("session_id"), "duration_ms": data.get("duration_ms"),
             "usage": data.get("usage"), "cost_usd": data.get("total_cost_usd"),   # API 환산 비용 (구독이면 실제 과금 아님)
             "models": list((data.get("modelUsage") or {}).keys()),
             "actions": parser.actions, "denials": data.get("permission_denials") or []}  # 도구 사용 기록·거부된 요청
     return str(data.get("result", "")).strip(), meta
+
+
+# ---- 모델 자동 대체 ----
+# 구독 플랜에 따라 어떤 모델(예: Fable)은 별도 크레딧이 없으면 429 credits_required 로 거절된다(실기 2026-09-18, 다른 사용자 PC).
+# 모델 하나 때문에 토론이 멈추지 않도록 아래 순서로 대체하고 meta.resolve_note 에 남긴다. 사이드바에서 처음부터 다른 모델을 골라도 된다.
+CLAUDE_FALLBACK = ["opus", "sonnet"]
+
+
+class CreditsRequired(CLIError):
+    """요청한 Claude 모델이 크레딧 필요로 거절됨 (대체 가능)."""
+
+
+def call_claude(cfg: Config, system_prompt: str, prompt: str, stage: str,
+                on_delta: DeltaCB | None = None, on_tick: TickCB | None = None,
+                cancel: threading.Event | None = None, images: list[dict] | None = None,
+                on_action: Callable[[list[dict]], None] | None = None) -> tuple[str, dict]:
+    """_call_claude_once 를 감싸, 크레딧 필요로 거절되면 CLAUDE_FALLBACK 순서로 다른 모델을 시도한다."""
+    requested = cfg.claude_model
+    tried: list[str] = []
+    for model in [requested] + [m for m in CLAUDE_FALLBACK if m != requested]:
+        c = cfg if model == requested else dataclasses.replace(cfg, claude_model=model)
+        try:
+            text, meta = _call_claude_once(c, system_prompt, prompt, stage, on_delta, on_tick, cancel, images, on_action)
+        except CreditsRequired:
+            tried.append(model or "(기본)")
+            continue
+        if tried:
+            meta["resolve_note"] = f"{' → '.join(tried)} 크레딧 필요 → {model}로 대체"
+        return text, meta
+    raise CLIError("claude", stage, f"모델 {', '.join(tried)} 모두 크레딧 필요 — claude.ai/settings/usage 에서 확인하거나 다른 모델을 고르십시오")
 
 
 def call_codex(cfg: Config, prompt: str, stage: str,

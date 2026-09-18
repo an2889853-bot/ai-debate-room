@@ -67,7 +67,7 @@ codex exec --skip-git-repo-check --ephemeral --color never -o <임시파일>
 - effort는 `-c model_reasoning_effort=high`처럼 따옴표 없이 넘긴다(TOML 파싱 실패 시 문자열 리터럴로 처리됨).
 
 **모델 정책** (`Config` 기본값 = UI `DEFAULT_SETTINGS` = `ui_settings.json`)
-- Claude `fable` + `xhigh`. 별칭(`CLAUDE_MODELS = fable/opus/sonnet`)은 CLI가 최신 모델로 해석. effort `CLAUDE_EFFORTS = low~max`.
+- Claude `fable` + `xhigh`. 별칭(`CLAUDE_MODELS = fable/opus/sonnet`)은 CLI가 최신 모델로 해석. effort `CLAUDE_EFFORTS = low~max`. 요청 모델이 구독에 없어 429 `credits_required`("requires usage credits")로 거절되면 `call_claude`가 `CreditsRequired`를 잡아 `CLAUDE_FALLBACK = [opus, sonnet]` 순으로 재시도하고 `meta.resolve_note`("fable 크레딧 필요 → opus로 대체")에 남긴다(UI 캡션·`--check`에 표시). 전부 거절되면 CLIError. 다른 종류의 오류는 대체하지 않는다.
 - Codex `auto` + `xhigh`. `resolve_codex(cfg)`가 실행 시점에 카탈로그의 최상위(priority 최소, visibility=list) 모델로 해석. 카탈로그는 `list_codex_models()` = `codex debug models` → 실패 시 `docs\codex-models.json` → 내장 `CODEX_MODELS_FALLBACK`; `cached_codex_models()`가 1시간 캐시. effort가 그 모델 미지원이면 `EFFORT_ORDER`에서 가장 가까운 아래 단계로 낮추고 `meta.resolve_note`에 기록.
 
 ### 2.2 단계 계획

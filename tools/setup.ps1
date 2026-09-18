@@ -129,7 +129,7 @@ if ($codexCmd) {
 Step "6/6 점검 (두 CLI를 한 번씩 호출)"
 if (Test-Path $py) {
     $rc = Run $py @("debate.py", "--check")
-    if ($rc -eq 0) { Write-Host "점검 통과" -ForegroundColor Green } else { $problems++; Fail "점검에서 실패한 CLI가 있습니다 (위 ❌ 줄 참고). 로그인이 안 됐으면 setup.cmd를 다시 실행하세요." }
+    if ($rc -eq 0) { Write-Host "점검 통과" -ForegroundColor Green } else { $problems++; Fail "설치는 끝났지만 점검에서 실패한 CLI가 있습니다 (위 ❌ 줄 참고). 로그인 문제면 setup.cmd 재실행, 모델 문제(credits_required)면 앱 사이드바 '🧠 모델'에서 다른 모델을 고르면 됩니다." }
 } else { $problems++; Fail ".venv가 없어 점검을 건너뜁니다." }
 
 Write-Host ""

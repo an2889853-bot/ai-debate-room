@@ -80,6 +80,8 @@ def check_clis(cfg: Config) -> bool:
                     used += f"  ({meta['resolve_note']})"
             elif cli == "claude" and meta.get("models"):
                 used = f"  [models={','.join(meta['models'])}]"
+                if meta.get("resolve_note"):
+                    used += f"  ({meta['resolve_note']})"
             print(f"✅ {cli}: {text!r}  ({time.time() - t0:.1f}s){used}  <- {exe}")
         except Exception as e:  # noqa: BLE001
             ok = False
